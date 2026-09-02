@@ -1,0 +1,340 @@
+// Prisma Schema for VS DIGITECH Enterprise CRM
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  MASTER_ADMIN
+  SUB_ADMIN
+  FACILITY_MANAGER
+  SERVICE_PERSONNEL
+}
+
+enum RequestStatus {
+  PENDING_MASTER_ADMIN
+  PENDING_FACILITY_MANAGER
+  APPROVED
+  REJECTED
+}
+
+enum LeaveStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum InvoiceStatus {
+  UNPAID
+  PARTIAL
+  PAID
+  OVERDUE
+}
+
+enum VoucherType {
+  PAYMENT
+  JOURNAL
+  CONTRA
+  RECEIPT
+}
+
+enum InventoryTxType {
+  INFLOW
+  OUTFLOW
+}
+
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  password     String
+  phone        String?
+  designation  String
+  role         Role     @default(SERVICE_PERSONNEL)
+  isMfaEnabled Boolean  @default(false)
+  avatarUrl    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  meetingsAssigned ServiceMeeting[]    @relation("AssignedPersonnel")
+  attendanceLogs   AttendanceLog[]
+  leaveRequests    LeaveRequest[]
+  salaryRecords    SalaryRecord[]
+  locations        PersonnelLocation[]
+  siteAMCs         SiteAMC[]           @relation("EmployeeAMC")
+  activityLogs     ActivityLog[]
+}
+
+model ActivityLog {
+  id        String   @id @default(uuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  userName  String
+  action    String
+  module    String
+  ipAddress String?
+  timestamp DateTime @default(now())
+}
+
+model ServiceMeeting {
+  id              String   @id @default(uuid())
+  title           String
+  clientName      String
+  clientAddress   String
+  scheduledAt     DateTime
+  status          String   @default("SCHEDULED") // SCHEDULED, IN_PROGRESS, COMPLETED, CANCELLED
+  assignedToId    String?
+  assignedTo      User?    @relation("AssignedPersonnel", fields: [assignedToId], references: [id], onDelete: SetNull)
+  assignedToName  String?
+  agenda          String
+  deliverables    String?
+  outcomeNotes    String?
+  serviceUpdates  String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  materialRequests MaterialRequest[]
+}
+
+model MaterialRequest {
+  id                       String        @id @default(uuid())
+  meetingId                String
+  meeting                  ServiceMeeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  itemTitle                String
+  quantity                 Int
+  unit                     String
+  justification            String
+  expectedUsage            String
+  status                   RequestStatus @default(PENDING_MASTER_ADMIN)
+  masterAdminApprovedBy    String?
+  facilityManagerApprovedBy String?
+  rejectionReason          String?
+  createdAt                DateTime      @default(now())
+  updatedAt                DateTime      @updatedAt
+}
+
+model AttendanceLog {
+  id           String    @id @default(uuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userName     String
+  date         DateTime  @default(now())
+  checkInTime  String?
+  checkOutTime String?
+  status       String    @default("PRESENT") // PRESENT, ABSENT, LATE, LEAVE
+  location     String?
+  method       String    @default("WEB") // BIOMETRIC, MOBILE, WEB
+}
+
+model LeaveRequest {
+  id          String      @id @default(uuid())
+  userId      String
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userName    String
+  leaveType   String      // CASUAL, SICK, EARNED
+  startDate   DateTime
+  endDate     DateTime
+  reason      String
+  status      LeaveStatus @default(PENDING)
+  approvedBy  String?
+  createdAt   DateTime    @default(now())
+}
+
+model ShiftSchedule {
+  id        String   @id @default(uuid())
+  userId    String
+  userName  String
+  shiftName String   // MORNING, EVENING, NIGHT
+  startTime String
+  endTime   String
+  date      DateTime
+  notes     String?
+}
+
+model SalaryRecord {
+  id             String   @id @default(uuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userName       String
+  month          String
+  year           Int
+  baseSalary     Float
+  overtimeHours  Float    @default(0)
+  overtimePay    Float    @default(0)
+  allowances     Float    @default(0)
+  deductions     Float    @default(0)
+  netSalary      Float
+  status         String   @default("PROCESSED") // DRAFT, PROCESSED, PAID
+  pfDeduction    Float    @default(0)
+  taxDeduction   Float    @default(0)
+  generatedAt    DateTime @default(now())
+}
+
+model PersonnelLocation {
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userName     String
+  latitude     Float
+  longitude    Float
+  address      String
+  batteryLevel Int      @default(100)
+  speed        Float    @default(0)
+  updatedAt    DateTime @default(now())
+}
+
+model RouteHistory {
+  id             String   @id @default(uuid())
+  userId         String
+  userName       String
+  date           DateTime @default(now())
+  coordinatesJson String  // JSON array of [lat, lng, timestamp]
+  distanceKm     Float    @default(0)
+  totalVisits    Int      @default(0)
+}
+
+model GeofenceAlert {
+  id        String   @id @default(uuid())
+  userId    String
+  userName  String
+  zoneName  String
+  alertType String   // DEVIATION, ENTRY, EXIT
+  message   String
+  timestamp DateTime @default(now())
+}
+
+model Product {
+  id             String   @id @default(uuid())
+  code           String   @unique
+  name           String
+  category       String
+  brand          String
+  stockQuantity  Int
+  unit           String
+  minStockAlert  Int      @default(10)
+  unitPrice      Float
+  qrCodeUrl      String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  transactions   InventoryTransaction[]
+}
+
+model InventoryTransaction {
+  id          String          @id @default(uuid())
+  productId   String
+  product     Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  type        InventoryTxType
+  quantity    Int
+  referenceNo String
+  notes       String?
+  performedBy String
+  createdAt   DateTime        @default(now())
+}
+
+model Quotation {
+  id              String   @id @default(uuid())
+  quotationNumber String   @unique
+  clientName      String
+  clientEmail     String
+  clientPhone     String?
+  totalAmount     Float
+  gstAmount       Float
+  grandTotal      Float
+  status          String   @default("DRAFT") // DRAFT, SENT, APPROVED, REJECTED
+  validUntil      DateTime
+  itemsJson       String   // JSON string of item line details
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  invoices        Invoice[]
+}
+
+model Invoice {
+  id            String        @id @default(uuid())
+  invoiceNumber String        @unique
+  quotationId   String?
+  quotation     Quotation?    @relation(fields: [quotationId], references: [id], onDelete: SetNull)
+  clientName    String
+  clientEmail   String
+  totalAmount   Float
+  paidAmount    Float         @default(0)
+  balanceAmount Float
+  dueDate       DateTime
+  status        InvoiceStatus @default(UNPAID)
+  itemsJson     String
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  reminders     PaymentReminder[]
+}
+
+model PaymentReminder {
+  id            String   @id @default(uuid())
+  invoiceId     String
+  invoice       Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  clientName    String
+  clientContact String
+  channel       String   @default("EMAIL") // EMAIL, SMS
+  sentAt        DateTime @default(now())
+  status        String   @default("SENT")
+}
+
+model PurchaseEntry {
+  id              String   @id @default(uuid())
+  purchaseOrderNo String   @unique
+  vendorName      String
+  vendorGst       String
+  invoiceNo       String
+  category        String
+  totalAmount     Float
+  gstAmount       Float
+  status          String   @default("PENDING") // PENDING, APPROVED, REJECTED
+  itemsJson       String
+  invoiceUploadUrl String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model VoucherEntry {
+  id          String      @id @default(uuid())
+  voucherNo   String      @unique
+  type        VoucherType
+  amount      Float
+  accountHead String
+  narration   String
+  status      String      @default("APPROVED") // PENDING, APPROVED, REJECTED
+  approvedBy  String?
+  createdAt   DateTime    @default(now())
+}
+
+model SiteAMC {
+  id                   String         @id @default(uuid())
+  siteName             String
+  clientName           String
+  address              String
+  assignedEmployeeId   String?
+  assignedEmployee     User?          @relation("EmployeeAMC", fields: [assignedEmployeeId], references: [id], onDelete: SetNull)
+  assignedEmployeeName String?
+  visitDate            DateTime
+  status               String         @default("SCHEDULED") // SCHEDULED, IN_PROGRESS, COMPLETED
+  digitalSignOffBy     String?
+  notes                String?
+  createdAt            DateTime       @default(now())
+
+  checklists           AMCChecklist[]
+}
+
+model AMCChecklist {
+  id          String  @id @default(uuid())
+  siteAmcId   String
+  siteAMC     SiteAMC @relation(fields: [siteAmcId], references: [id], onDelete: Cascade)
+  taskName    String
+  isCompleted Boolean @default(false)
+  remarks     String?
+}
