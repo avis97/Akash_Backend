@@ -2,19 +2,25 @@ const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 const mockData = require('../src/mockData');
 
+const bcrypt = require('bcryptjs');
+
 async function main() {
-  console.log('🌱 Starting VS DIGITECH CRM Database Seeding...');
+  console.log('🌱 Starting Akash CRM Database Seeding...');
 
   // Seed Users
   for (const u of mockData.mockUsers) {
+    const hashedPassword = bcrypt.hashSync(u.password || 'password123', 10);
     await prisma.user.upsert({
       where: { email: u.email },
-      update: {},
+      update: {
+        password: hashedPassword,
+        role: u.role
+      },
       create: {
         id: u.id,
         name: u.name,
         email: u.email,
-        password: '$2a$10$e8W1x02eK0l0L/MockHashedPassword',
+        password: hashedPassword,
         phone: u.phone,
         designation: u.designation,
         role: u.role,
