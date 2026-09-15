@@ -288,7 +288,12 @@ app.post('/api/auth/register', authenticateToken, requireSuperAdmin, async (req,
       return res.status(400).json({ success: false, message: 'User with this email already exists' });
     }
 
-    const hashedPassword = bcrypt.hashSync(password || 'password123', 10);
+    // Supported 3 main roles: SUPERADMIN, EMPLOYEE, CLIENT (default: EMPLOYEE)
+    const validRoles = ['SUPERADMIN', 'EMPLOYEE', 'CLIENT', 'USER', 'MASTER_ADMIN', 'SUB_ADMIN', 'FACILITY_MANAGER', 'SERVICE_PERSONNEL'];
+    const assignedRole = (role && validRoles.includes(role)) ? role : 'EMPLOYEE';
+
+    const plainPassword = password && password.trim() ? password : `Akash@${Math.floor(1000 + Math.random() * 9000)}`;
+    const hashedPassword = bcrypt.hashSync(plainPassword, 10);
 
     const newUser = await prisma.user.create({
       data: {
@@ -296,19 +301,27 @@ app.post('/api/auth/register', authenticateToken, requireSuperAdmin, async (req,
         email,
         password: hashedPassword,
         phone: phone || null,
-        designation: designation || 'Staff Member',
-        role: role || 'USER',
+        designation: designation || (assignedRole === 'CLIENT' ? 'Client Representative' : 'Staff Member'),
+        role: assignedRole,
         isMfaEnabled: false,
         avatarUrl: `https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150`
       }
     });
 
-    await logActivity(req.user?.name || 'Superadmin', `Registered new user account in database: ${name} (${role})`, 'User Management');
+    await logActivity(req.user?.name || 'Superadmin', `Registered new ${assignedRole} account in database: ${name} (${email})`, 'User Management');
 
     return res.status(201).json({
       success: true,
-      message: 'User registered successfully in database',
-      data: newUser
+      message: `${assignedRole} user account registered successfully in database`,
+      data: newUser,
+      credentials: {
+        name: newUser.name,
+        email: newUser.email,
+        password: plainPassword,
+        role: newUser.role,
+        phone: newUser.phone,
+        designation: newUser.designation
+      }
     });
   } catch (err) {
     console.error('Registration error:', err);
@@ -323,7 +336,16 @@ app.post('/api/users', authenticateToken, requireSuperAdmin, async (req, res) =>
       return res.status(400).json({ success: false, message: 'Name and email are required' });
     }
 
-    const hashedPassword = bcrypt.hashSync(password || 'password123', 10);
+    const existingUser = await prisma.user.findUnique({ where: { email } });
+    if (existingUser) {
+      return res.status(400).json({ success: false, message: 'User with this email already exists' });
+    }
+
+    const validRoles = ['SUPERADMIN', 'EMPLOYEE', 'CLIENT', 'USER', 'MASTER_ADMIN', 'SUB_ADMIN', 'FACILITY_MANAGER', 'SERVICE_PERSONNEL'];
+    const assignedRole = (role && validRoles.includes(role)) ? role : 'EMPLOYEE';
+
+    const plainPassword = password && password.trim() ? password : `Akash@${Math.floor(1000 + Math.random() * 9000)}`;
+    const hashedPassword = bcrypt.hashSync(plainPassword, 10);
 
     const newUser = await prisma.user.create({
       data: {
@@ -331,16 +353,27 @@ app.post('/api/users', authenticateToken, requireSuperAdmin, async (req, res) =>
         email,
         password: hashedPassword,
         phone: phone || null,
-        designation: designation || 'Staff Member',
-        role: role || 'USER',
+        designation: designation || (assignedRole === 'CLIENT' ? 'Client Representative' : 'Staff Member'),
+        role: assignedRole,
         isMfaEnabled: false,
         avatarUrl: `https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150`
       }
     });
 
-    await logActivity(req.user?.name || 'Superadmin', `Created user account: ${name} (${role})`, 'User Management');
+    await logActivity(req.user?.name || 'Superadmin', `Created ${assignedRole} user account: ${name} (${email})`, 'User Management');
 
-    return res.status(201).json({ success: true, data: newUser });
+    return res.status(201).json({
+      success: true,
+      data: newUser,
+      credentials: {
+        name: newUser.name,
+        email: newUser.email,
+        password: plainPassword,
+        role: newUser.role,
+        phone: newUser.phone,
+        designation: newUser.designation
+      }
+    });
   } catch (err) {
     console.error('Create user error:', err);
     return res.status(500).json({ success: false, message: err.message });

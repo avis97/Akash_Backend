@@ -11,6 +11,8 @@ datasource db {
 
 enum Role {
   SUPERADMIN
+  EMPLOYEE
+  CLIENT
   USER
   MASTER_ADMIN
   SUB_ADMIN
