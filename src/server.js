@@ -1325,22 +1325,27 @@ app.put('/api/meetings/:id', async (req, res) => {
     const { id } = req.params;
     const { title, clientName, clientAddress, scheduledAt, assignedToId, agenda, deliverables, status, outcomeNotes, serviceUpdates } = req.body;
 
+    const targetAssignedId = (assignedToId === '' || assignedToId === null) ? null : assignedToId;
     let assignedUser = null;
-    if (assignedToId) {
-      assignedUser = await prisma.user.findUnique({ where: { id: assignedToId } });
+    if (targetAssignedId) {
+      assignedUser = await prisma.user.findUnique({ where: { id: targetAssignedId } });
     }
+
+    const scheduledDate = scheduledAt && !isNaN(new Date(scheduledAt).getTime()) ? new Date(scheduledAt) : undefined;
 
     const updated = await prisma.serviceMeeting.update({
       where: { id },
       data: {
-        ...(title && { title }),
-        ...(clientName && { clientName }),
-        ...(clientAddress && { clientAddress }),
-        ...(scheduledAt && { scheduledAt: new Date(scheduledAt) }),
-        ...(assignedToId !== undefined && { assignedToId }),
-        ...(assignedUser && { assignedToName: assignedUser.name }),
-        ...(agenda && { agenda }),
-        ...(deliverables && { deliverables }),
+        ...(title !== undefined && { title }),
+        ...(clientName !== undefined && { clientName }),
+        ...(clientAddress !== undefined && { clientAddress }),
+        ...(scheduledDate !== undefined && { scheduledAt: scheduledDate }),
+        ...(targetAssignedId !== undefined && { assignedToId: targetAssignedId }),
+        ...(targetAssignedId !== undefined && { 
+          assignedToName: assignedUser ? assignedUser.name : (targetAssignedId === null ? 'Unassigned Personnel' : undefined) 
+        }),
+        ...(agenda !== undefined && { agenda }),
+        ...(deliverables !== undefined && { deliverables }),
         ...(status && { status }),
         ...(outcomeNotes !== undefined && { outcomeNotes }),
         ...(serviceUpdates !== undefined && { serviceUpdates })
@@ -1350,6 +1355,7 @@ app.put('/api/meetings/:id', async (req, res) => {
     await logActivity('Admin', `Updated details for service meeting #${id}`, 'Service Meetings');
     return res.json({ success: true, data: updated });
   } catch (err) {
+    console.error('Error updating meeting:', err);
     return res.status(500).json({ success: false, message: err.message });
   }
 });
