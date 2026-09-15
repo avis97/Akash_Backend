@@ -250,9 +250,9 @@ const requireSuperAdmin = (req, res, next) => {
 };
 
 // ----------------------------------------------------
-// 1. User Management & Access Control (Database Driven - Superadmin Only)
+// 1. User Management & Access Control (Database Driven - Safe Directory for Authed Users)
 // ----------------------------------------------------
-app.get('/api/users', authenticateToken, requireSuperAdmin, async (req, res) => {
+app.get('/api/users', authenticateToken, async (req, res) => {
   try {
     const dbUsers = await prisma.user.findMany({
       orderBy: { createdAt: 'desc' },
@@ -459,7 +459,10 @@ app.patch('/api/users/:id/mfa', authenticateToken, requireSuperAdmin, async (req
 // ----------------------------------------------------
 app.get('/api/meetings', async (req, res) => {
   try {
+    const { assignedToId } = req.query;
+    const whereClause = assignedToId ? { assignedToId } : {};
     const meetings = await prisma.serviceMeeting.findMany({
+      where: whereClause,
       orderBy: { createdAt: 'desc' },
       include: {
         assignedTo: {
@@ -1024,6 +1027,26 @@ app.post('/api/billing/quotations', async (req, res) => {
     await logActivity('Billing Officer', `Created quotation #${newQ.quotationNumber} for ${clientName}`, 'Billing & Quotations');
     return res.status(201).json({ success: true, data: newQ });
   } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.patch('/api/billing/quotations/:id/accept', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { acceptedBy } = req.body;
+    const existing = await prisma.quotation.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ success: false, message: 'Quotation not found' });
+
+    const updated = await prisma.quotation.update({
+      where: { id },
+      data: { status: 'APPROVED' }
+    });
+
+    await logActivity(acceptedBy || existing.clientName || 'Client', `Client accepted quotation #${existing.quotationNumber} (₹${existing.grandTotal.toLocaleString()})`, 'Billing & Quotations');
+    return res.json({ success: true, message: 'Quotation successfully accepted', data: updated });
+  } catch (err) {
+    console.error('Error accepting quotation:', err);
     return res.status(500).json({ success: false, message: err.message });
   }
 });
