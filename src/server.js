@@ -41,6 +41,9 @@ function formatDbErrorMessage(err) {
     if (err.message.includes("Can't reach database server") || err.message.includes('ECONNREFUSED')) {
       return 'Database Connection Error: PostgreSQL service is offline or unreachable on 127.0.0.1:5432.';
     }
+    if (err.message.includes('does not exist in the current database') || (err.message.includes('column') && err.message.includes('does not exist'))) {
+      return 'Database Schema Error: Missing columns in PostgreSQL table. Please run "npx prisma db push" on the backend server to sync the schema.';
+    }
     return err.message;
   }
   return 'Database operation failed';
