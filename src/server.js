@@ -32,6 +32,20 @@ async function logActivity(userName, action, module) {
   }
 }
 
+// Helper to format friendly DB connection & auth errors
+function formatDbErrorMessage(err) {
+  if (err && err.message) {
+    if (err.message.includes('Authentication failed against database server') || err.message.includes('provided database credentials')) {
+      return 'Database Authentication Error: Invalid PostgreSQL credentials in backend .env file. Please check DATABASE_URL password.';
+    }
+    if (err.message.includes("Can't reach database server") || err.message.includes('ECONNREFUSED')) {
+      return 'Database Connection Error: PostgreSQL service is offline or unreachable on 127.0.0.1:5432.';
+    }
+    return err.message;
+  }
+  return 'Database operation failed';
+}
+
 // ----------------------------------------------------
 // Health Check Endpoint
 // ----------------------------------------------------
@@ -378,7 +392,7 @@ async function handleCreateUserOrEmployee(req, res) {
     });
   } catch (err) {
     console.error('Employee creation error:', err);
-    return res.status(500).json({ success: false, message: err.message || 'Error creating employee' });
+    return res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
   }
 }
 
@@ -470,6 +484,36 @@ app.patch('/api/users/:id/mfa', authenticateToken, requireSuperAdmin, async (req
     return res.json({ success: true, data: updated });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Delete user / employee endpoint
+app.delete('/api/users/:id', authenticateToken, requireSuperAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const existing = await prisma.user.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ success: false, message: 'User account not found' });
+
+    await prisma.user.delete({ where: { id } });
+    await logActivity(req.user?.name || 'Superadmin', `Deleted user account #${id}: ${existing.name} (${existing.email})`, 'User Management');
+    return res.json({ success: true, message: 'User account deleted successfully' });
+  } catch (err) {
+    console.error('Delete user error:', err);
+    return res.status(500).json({ success: false, message: err.message || 'Error deleting user' });
+  }
+});
+app.delete('/api/employees/:id', authenticateToken, requireSuperAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const existing = await prisma.user.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ success: false, message: 'Employee account not found' });
+
+    await prisma.user.delete({ where: { id } });
+    await logActivity(req.user?.name || 'Superadmin', `Deleted employee account #${id}: ${existing.name} (${existing.email})`, 'User Management');
+    return res.json({ success: true, message: 'Employee account deleted successfully' });
+  } catch (err) {
+    console.error('Delete employee error:', err);
+    return res.status(500).json({ success: false, message: err.message || 'Error deleting employee' });
   }
 });
 
