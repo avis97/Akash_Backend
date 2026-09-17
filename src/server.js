@@ -1055,12 +1055,17 @@ app.post('/api/inventory/transaction', async (req, res) => {
 });
 
 // ----------------------------------------------------
-// 7. Billing & Quotation Management (Database)
+// 7. Billing & Quotation Management (Database & Client Lifecycle Connected)
 // ----------------------------------------------------
 app.get('/api/billing/quotations', async (req, res) => {
   try {
     const quotations = await prisma.quotation.findMany({
-      orderBy: { createdAt: 'desc' }
+      orderBy: { createdAt: 'desc' },
+      include: {
+        client: {
+          select: { id: true, name: true, email: true, phone: true, clientStatus: true }
+        }
+      }
     });
     return res.json({ success: true, data: quotations });
   } catch (err) {
@@ -1070,7 +1075,7 @@ app.get('/api/billing/quotations', async (req, res) => {
 
 app.post('/api/billing/quotations', async (req, res) => {
   try {
-    const { clientName, clientEmail, totalAmount, items } = req.body;
+    const { clientId, clientName, clientEmail, totalAmount, items } = req.body;
     const total = Number(totalAmount) || 50000;
     const gst = Math.round(total * 0.18);
     const grand = total + gst;
@@ -1079,6 +1084,7 @@ app.post('/api/billing/quotations', async (req, res) => {
     const newQ = await prisma.quotation.create({
       data: {
         quotationNumber: qNo,
+        clientId: clientId || null,
         clientName,
         clientEmail,
         totalAmount: total,
@@ -1090,13 +1096,65 @@ app.post('/api/billing/quotations', async (req, res) => {
       }
     });
 
-    await logActivity('Billing Officer', `Created quotation #${newQ.quotationNumber} for ${clientName}`, 'Billing & Quotations');
+    // Update Client status to QUOTATION_SENT
+    if (clientId) {
+      await prisma.user.update({
+        where: { id: clientId },
+        data: { clientStatus: 'QUOTATION_SENT' }
+      }).catch(e => console.warn('Could not update client status:', e));
+    }
+
+    await logActivity('Billing Officer', `Created and sent quotation #${newQ.quotationNumber} to Client ${clientName}`, 'Billing & Quotations');
     return res.status(201).json({ success: true, data: newQ });
+  } catch (err) {
+    console.error('Error creating quotation:', err);
+    return res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
+  }
+});
+
+app.put('/api/billing/quotations/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { clientName, clientEmail, totalAmount, status } = req.body;
+    const existing = await prisma.quotation.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ success: false, message: 'Quotation not found' });
+
+    const total = totalAmount ? Number(totalAmount) : existing.totalAmount;
+    const gst = Math.round(total * 0.18);
+    const grand = total + gst;
+
+    const updated = await prisma.quotation.update({
+      where: { id },
+      data: {
+        ...(clientName && { clientName }),
+        ...(clientEmail && { clientEmail }),
+        ...(totalAmount && { totalAmount: total, gstAmount: gst, grandTotal: grand }),
+        ...(status && { status })
+      }
+    });
+
+    await logActivity('Billing Admin', `Updated quotation #${existing.quotationNumber}`, 'Billing & Quotations');
+    return res.json({ success: true, data: updated });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
 });
 
+app.delete('/api/billing/quotations/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const existing = await prisma.quotation.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ success: false, message: 'Quotation not found' });
+
+    await prisma.quotation.delete({ where: { id } });
+    await logActivity('Billing Admin', `Deleted quotation #${existing.quotationNumber}`, 'Billing & Quotations');
+    return res.json({ success: true, message: 'Quotation deleted successfully' });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ACCEPT QUOTATION -> AUTOMATICALLY GENERATE FINAL TAX INVOICE
 app.patch('/api/billing/quotations/:id/accept', async (req, res) => {
   try {
     const { id } = req.params;
@@ -1104,23 +1162,73 @@ app.patch('/api/billing/quotations/:id/accept', async (req, res) => {
     const existing = await prisma.quotation.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ success: false, message: 'Quotation not found' });
 
-    const updated = await prisma.quotation.update({
+    // 1. Update Quotation Status to APPROVED
+    const updatedQuot = await prisma.quotation.update({
       where: { id },
       data: { status: 'APPROVED' }
     });
 
-    await logActivity(acceptedBy || existing.clientName || 'Client', `Client accepted quotation #${existing.quotationNumber} (₹${existing.grandTotal.toLocaleString()})`, 'Billing & Quotations');
-    return res.json({ success: true, message: 'Quotation successfully accepted', data: updated });
+    // 2. AUTOMATICALLY GENERATE FINAL TAX INVOICE IN DATABASE
+    const invNo = `INV/VS/2026/${Math.floor(100 + Math.random() * 900)}`;
+    const billAmount = existing.grandTotal || existing.totalAmount;
+
+    let itemsParsed = [];
+    try {
+      itemsParsed = JSON.parse(existing.itemsJson);
+    } catch (e) {
+      itemsParsed = [{ name: 'Service & System Installation', qty: 1, amount: billAmount }];
+    }
+
+    const generatedInvoice = await prisma.invoice.create({
+      data: {
+        invoiceNumber: invNo,
+        quotationId: existing.id,
+        clientId: existing.clientId || null,
+        clientName: existing.clientName,
+        clientEmail: existing.clientEmail,
+        totalAmount: billAmount,
+        paidAmount: 0,
+        balanceAmount: billAmount,
+        dueDate: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000), // 15 Days Due Date
+        status: 'UNPAID',
+        itemsJson: existing.itemsJson || JSON.stringify(itemsParsed)
+      }
+    });
+
+    // 3. Update Client status to ACTIVE_CLIENT / WON
+    if (existing.clientId) {
+      await prisma.user.update({
+        where: { id: existing.clientId },
+        data: { clientStatus: 'ACTIVE_CLIENT' }
+      }).catch(e => console.warn('Could not update client status to active:', e));
+    }
+
+    await logActivity(
+      acceptedBy || existing.clientName || 'Client',
+      `Client accepted Quotation #${existing.quotationNumber} (₹${billAmount.toLocaleString()}). Final Tax Invoice #${generatedInvoice.invoiceNumber} automatically created!`,
+      'Billing & Quotations'
+    );
+
+    return res.json({
+      success: true,
+      message: `Quotation accepted! Final Tax Invoice #${generatedInvoice.invoiceNumber} automatically generated.`,
+      data: updatedQuot,
+      invoice: generatedInvoice
+    });
   } catch (err) {
     console.error('Error accepting quotation:', err);
-    return res.status(500).json({ success: false, message: err.message });
+    return res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
   }
 });
 
 app.get('/api/billing/invoices', async (req, res) => {
   try {
     const invoices = await prisma.invoice.findMany({
-      orderBy: { createdAt: 'desc' }
+      orderBy: { createdAt: 'desc' },
+      include: {
+        quotation: { select: { quotationNumber: true } },
+        client: { select: { id: true, name: true, email: true, phone: true } }
+      }
     });
     return res.json({ success: true, data: invoices });
   } catch (err) {
@@ -1130,13 +1238,15 @@ app.get('/api/billing/invoices', async (req, res) => {
 
 app.post('/api/billing/invoices', async (req, res) => {
   try {
-    const { clientName, clientEmail, totalAmount, dueDate, items } = req.body;
+    const { clientId, clientName, clientEmail, totalAmount, dueDate, items, quotationId } = req.body;
     const total = Number(totalAmount) || 65000;
     const invNo = `INV/VS/2026/${Math.floor(100 + Math.random() * 900)}`;
 
     const newInv = await prisma.invoice.create({
       data: {
         invoiceNumber: invNo,
+        quotationId: quotationId || null,
+        clientId: clientId || null,
         clientName,
         clientEmail,
         totalAmount: total,
@@ -1150,6 +1260,47 @@ app.post('/api/billing/invoices', async (req, res) => {
 
     await logActivity('Billing Officer', `Issued Invoice #${newInv.invoiceNumber} to ${clientName} (₹${total})`, 'Billing & Invoicing');
     return res.status(201).json({ success: true, data: newInv });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
+  }
+});
+
+app.put('/api/billing/invoices/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { paidAmount, status } = req.body;
+    const existing = await prisma.invoice.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ success: false, message: 'Invoice not found' });
+
+    const newPaid = paidAmount !== undefined ? Number(paidAmount) : existing.paidAmount;
+    const newBal = Math.max(0, existing.totalAmount - newPaid);
+    const newStatus = status || (newBal === 0 ? 'PAID' : newPaid > 0 ? 'PARTIAL' : existing.status);
+
+    const updated = await prisma.invoice.update({
+      where: { id },
+      data: {
+        paidAmount: newPaid,
+        balanceAmount: newBal,
+        status: newStatus
+      }
+    });
+
+    await logActivity('Billing Officer', `Updated payment on Invoice #${existing.invoiceNumber}: Paid ₹${newPaid}, Balance ₹${newBal}`, 'Billing & Invoicing');
+    return res.json({ success: true, data: updated });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.delete('/api/billing/invoices/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const existing = await prisma.invoice.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ success: false, message: 'Invoice not found' });
+
+    await prisma.invoice.delete({ where: { id } });
+    await logActivity('Billing Officer', `Deleted Invoice #${existing.invoiceNumber}`, 'Billing & Invoicing');
+    return res.json({ success: true, message: 'Invoice deleted successfully' });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
