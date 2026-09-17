@@ -62,6 +62,32 @@ model User {
   role         Role     @default(SERVICE_PERSONNEL)
   isMfaEnabled Boolean  @default(false)
   avatarUrl    String?
+
+  // Employee Personal & Company Details
+  employeeId           String?   @unique
+  dob                  String?
+  gender               String?
+  address              String?
+  branch               String?
+  department           String?
+  dateOfJoining        String?
+
+  // Document Uploads (Base64 / Data URLs / File Paths)
+  hsCertificate        String?
+  panCard              String?
+  aadhaarCard          String?
+  passport             String?
+  graduation           String?
+  experienceLetter     String?
+  addressProof         String?
+
+  // Bank Account Details
+  accountHolderName    String?
+  accountNumber        String?
+  bankName             String?
+  bankIdentifierCode   String?
+  branchLocation       String?
+
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 

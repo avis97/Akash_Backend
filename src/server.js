@@ -252,21 +252,39 @@ const requireSuperAdmin = (req, res, next) => {
 // ----------------------------------------------------
 // 1. User Management & Access Control (Database Driven - Safe Directory for Authed Users)
 // ----------------------------------------------------
+// Helper function to generate next Employee ID
+async function generateNextEmployeeId() {
+  const usersWithEmpId = await prisma.user.findMany({
+    where: { employeeId: { not: null } },
+    select: { employeeId: true }
+  });
+  let maxNum = 57; // Default starting index to generate #EMP00058
+  usersWithEmpId.forEach(u => {
+    if (u.employeeId) {
+      const match = u.employeeId.match(/\d+/);
+      if (match) {
+        const num = parseInt(match[0], 10);
+        if (num > maxNum) maxNum = num;
+      }
+    }
+  });
+  const nextNum = maxNum + 1;
+  return `#EMP${String(nextNum).padStart(5, '0')}`;
+}
+
+app.get('/api/employees/next-id', authenticateToken, async (req, res) => {
+  try {
+    const nextId = await generateNextEmployeeId();
+    return res.json({ success: true, employeeId: nextId });
+  } catch (err) {
+    return res.status(500).json({ success: false, employeeId: '#EMP00058' });
+  }
+});
+
 app.get('/api/users', authenticateToken, async (req, res) => {
   try {
     const dbUsers = await prisma.user.findMany({
-      orderBy: { createdAt: 'desc' },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        phone: true,
-        designation: true,
-        role: true,
-        isMfaEnabled: true,
-        avatarUrl: true,
-        createdAt: true
-      }
+      orderBy: { createdAt: 'desc' }
     });
     return res.json({ success: true, data: dbUsers });
   } catch (err) {
@@ -274,117 +292,110 @@ app.get('/api/users', authenticateToken, async (req, res) => {
   }
 });
 
-// Register User endpoint (Accessible ONLY by Superadmin)
-app.post('/api/auth/register', authenticateToken, requireSuperAdmin, async (req, res) => {
+app.get('/api/employees', authenticateToken, async (req, res) => {
   try {
-    const { name, email, password, phone, designation, role } = req.body;
-
-    if (!email || !name) {
-      return res.status(400).json({ success: false, message: 'Name and email are required' });
-    }
-
-    const existingUser = await prisma.user.findUnique({ where: { email } });
-    if (existingUser) {
-      return res.status(400).json({ success: false, message: 'User with this email already exists' });
-    }
-
-    // Supported 3 main roles: SUPERADMIN, EMPLOYEE, CLIENT (default: EMPLOYEE)
-    const validRoles = ['SUPERADMIN', 'EMPLOYEE', 'CLIENT', 'USER', 'MASTER_ADMIN', 'SUB_ADMIN', 'FACILITY_MANAGER', 'SERVICE_PERSONNEL'];
-    const assignedRole = (role && validRoles.includes(role)) ? role : 'EMPLOYEE';
-
-    const plainPassword = password && password.trim() ? password : `Akash@${Math.floor(1000 + Math.random() * 9000)}`;
-    const hashedPassword = bcrypt.hashSync(plainPassword, 10);
-
-    const newUser = await prisma.user.create({
-      data: {
-        name,
-        email,
-        password: hashedPassword,
-        phone: phone || null,
-        designation: designation || (assignedRole === 'CLIENT' ? 'Client Representative' : 'Staff Member'),
-        role: assignedRole,
-        isMfaEnabled: false,
-        avatarUrl: `https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150`
-      }
+    const dbUsers = await prisma.user.findMany({
+      orderBy: { createdAt: 'desc' }
     });
-
-    await logActivity(req.user?.name || 'Superadmin', `Registered new ${assignedRole} account in database: ${name} (${email})`, 'User Management');
-
-    return res.status(201).json({
-      success: true,
-      message: `${assignedRole} user account registered successfully in database`,
-      data: newUser,
-      credentials: {
-        name: newUser.name,
-        email: newUser.email,
-        password: plainPassword,
-        role: newUser.role,
-        phone: newUser.phone,
-        designation: newUser.designation
-      }
-    });
+    return res.json({ success: true, data: dbUsers });
   } catch (err) {
-    console.error('Registration error:', err);
-    return res.status(500).json({ success: false, message: err.message || 'Error registering user' });
-  }
-});
-
-app.post('/api/users', authenticateToken, requireSuperAdmin, async (req, res) => {
-  try {
-    const { name, email, password, phone, designation, role } = req.body;
-    if (!email || !name) {
-      return res.status(400).json({ success: false, message: 'Name and email are required' });
-    }
-
-    const existingUser = await prisma.user.findUnique({ where: { email } });
-    if (existingUser) {
-      return res.status(400).json({ success: false, message: 'User with this email already exists' });
-    }
-
-    const validRoles = ['SUPERADMIN', 'EMPLOYEE', 'CLIENT', 'USER', 'MASTER_ADMIN', 'SUB_ADMIN', 'FACILITY_MANAGER', 'SERVICE_PERSONNEL'];
-    const assignedRole = (role && validRoles.includes(role)) ? role : 'EMPLOYEE';
-
-    const plainPassword = password && password.trim() ? password : `Akash@${Math.floor(1000 + Math.random() * 9000)}`;
-    const hashedPassword = bcrypt.hashSync(plainPassword, 10);
-
-    const newUser = await prisma.user.create({
-      data: {
-        name,
-        email,
-        password: hashedPassword,
-        phone: phone || null,
-        designation: designation || (assignedRole === 'CLIENT' ? 'Client Representative' : 'Staff Member'),
-        role: assignedRole,
-        isMfaEnabled: false,
-        avatarUrl: `https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150`
-      }
-    });
-
-    await logActivity(req.user?.name || 'Superadmin', `Created ${assignedRole} user account: ${name} (${email})`, 'User Management');
-
-    return res.status(201).json({
-      success: true,
-      data: newUser,
-      credentials: {
-        name: newUser.name,
-        email: newUser.email,
-        password: plainPassword,
-        role: newUser.role,
-        phone: newUser.phone,
-        designation: newUser.designation
-      }
-    });
-  } catch (err) {
-    console.error('Create user error:', err);
     return res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// Update existing User endpoint (Superadmin Only)
+// Helper for employee creation
+async function handleCreateUserOrEmployee(req, res) {
+  try {
+    const {
+      name, email, password, phone, designation, role,
+      employeeId, dob, gender, address, branch, department, dateOfJoining,
+      hsCertificate, panCard, aadhaarCard, passport, graduation, experienceLetter, addressProof,
+      accountHolderName, accountNumber, bankName, bankIdentifierCode, branchLocation
+    } = req.body;
+
+    if (!email || !name) {
+      return res.status(400).json({ success: false, message: 'Name and email are required' });
+    }
+
+    const existingUser = await prisma.user.findUnique({ where: { email } });
+    if (existingUser) {
+      return res.status(400).json({ success: false, message: 'User with this email already exists' });
+    }
+
+    const validRoles = ['SUPERADMIN', 'EMPLOYEE', 'CLIENT', 'USER', 'MASTER_ADMIN', 'SUB_ADMIN', 'FACILITY_MANAGER', 'SERVICE_PERSONNEL'];
+    const assignedRole = (role && validRoles.includes(role)) ? role : 'EMPLOYEE';
+
+    const plainPassword = password && password.trim() ? password : `Akash@${Math.floor(1000 + Math.random() * 9000)}`;
+    const hashedPassword = bcrypt.hashSync(plainPassword, 10);
+    const finalEmployeeId = employeeId && employeeId.trim() ? employeeId : await generateNextEmployeeId();
+
+    const newUser = await prisma.user.create({
+      data: {
+        name,
+        email,
+        password: hashedPassword,
+        phone: phone || null,
+        designation: designation || (assignedRole === 'CLIENT' ? 'Client Representative' : 'Staff Member'),
+        role: assignedRole,
+        isMfaEnabled: false,
+        avatarUrl: `https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150`,
+        employeeId: finalEmployeeId,
+        dob: dob || null,
+        gender: gender || 'Male',
+        address: address || null,
+        branch: branch || 'Main Branch',
+        department: department || 'General',
+        dateOfJoining: dateOfJoining || new Date().toISOString().split('T')[0],
+        hsCertificate: hsCertificate || null,
+        panCard: panCard || null,
+        aadhaarCard: aadhaarCard || null,
+        passport: passport || null,
+        graduation: graduation || null,
+        experienceLetter: experienceLetter || null,
+        addressProof: addressProof || null,
+        accountHolderName: accountHolderName || null,
+        accountNumber: accountNumber || null,
+        bankName: bankName || null,
+        bankIdentifierCode: bankIdentifierCode || null,
+        branchLocation: branchLocation || null
+      }
+    });
+
+    await logActivity(req.user?.name || 'Superadmin', `Created employee account (${finalEmployeeId}): ${name} (${email})`, 'User Management');
+
+    return res.status(201).json({
+      success: true,
+      message: 'Employee account created successfully in database',
+      data: newUser,
+      credentials: {
+        name: newUser.name,
+        email: newUser.email,
+        password: plainPassword,
+        role: newUser.role,
+        phone: newUser.phone,
+        designation: newUser.designation
+      }
+    });
+  } catch (err) {
+    console.error('Employee creation error:', err);
+    return res.status(500).json({ success: false, message: err.message || 'Error creating employee' });
+  }
+}
+
+app.post('/api/auth/register', authenticateToken, requireSuperAdmin, handleCreateUserOrEmployee);
+app.post('/api/users', authenticateToken, requireSuperAdmin, handleCreateUserOrEmployee);
+app.post('/api/employees', authenticateToken, requireSuperAdmin, handleCreateUserOrEmployee);
+
+// Update existing User / Employee endpoint
 app.put('/api/users/:id', authenticateToken, requireSuperAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, email, password, phone, designation, role, avatarUrl } = req.body;
+    const {
+      name, email, password, phone, designation, role, avatarUrl,
+      employeeId, dob, gender, address, branch, department, dateOfJoining,
+      hsCertificate, panCard, aadhaarCard, passport, graduation, experienceLetter, addressProof,
+      accountHolderName, accountNumber, bankName, bankIdentifierCode, branchLocation
+    } = req.body;
 
     const existingUser = await prisma.user.findUnique({ where: { id } });
     if (!existingUser) {
@@ -404,7 +415,26 @@ app.put('/api/users/:id', authenticateToken, requireSuperAdmin, async (req, res)
       ...(phone !== undefined && { phone }),
       ...(designation && { designation }),
       ...(role && { role }),
-      ...(avatarUrl !== undefined && { avatarUrl })
+      ...(avatarUrl !== undefined && { avatarUrl }),
+      ...(employeeId !== undefined && { employeeId }),
+      ...(dob !== undefined && { dob }),
+      ...(gender !== undefined && { gender }),
+      ...(address !== undefined && { address }),
+      ...(branch !== undefined && { branch }),
+      ...(department !== undefined && { department }),
+      ...(dateOfJoining !== undefined && { dateOfJoining }),
+      ...(hsCertificate !== undefined && { hsCertificate }),
+      ...(panCard !== undefined && { panCard }),
+      ...(aadhaarCard !== undefined && { aadhaarCard }),
+      ...(passport !== undefined && { passport }),
+      ...(graduation !== undefined && { graduation }),
+      ...(experienceLetter !== undefined && { experienceLetter }),
+      ...(addressProof !== undefined && { addressProof }),
+      ...(accountHolderName !== undefined && { accountHolderName }),
+      ...(accountNumber !== undefined && { accountNumber }),
+      ...(bankName !== undefined && { bankName }),
+      ...(bankIdentifierCode !== undefined && { bankIdentifierCode }),
+      ...(branchLocation !== undefined && { branchLocation })
     };
 
     if (password && password.trim() !== '') {
@@ -413,23 +443,12 @@ app.put('/api/users/:id', authenticateToken, requireSuperAdmin, async (req, res)
 
     const updatedUser = await prisma.user.update({
       where: { id },
-      data: updateData,
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        phone: true,
-        designation: true,
-        role: true,
-        isMfaEnabled: true,
-        avatarUrl: true,
-        createdAt: true
-      }
+      data: updateData
     });
 
-    await logActivity(req.user?.name || 'Superadmin', `Updated user account #${id}: ${updatedUser.name} (${updatedUser.role})`, 'User Management');
+    await logActivity(req.user?.name || 'Superadmin', `Updated employee account #${id}: ${updatedUser.name}`, 'User Management');
 
-    return res.json({ success: true, message: 'User updated successfully', data: updatedUser });
+    return res.json({ success: true, message: 'Employee updated successfully', data: updatedUser });
   } catch (err) {
     console.error('Update user error:', err);
     return res.status(500).json({ success: false, message: err.message || 'Error updating user' });
