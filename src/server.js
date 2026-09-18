@@ -1036,6 +1036,137 @@ app.post('/api/payroll/calculate', async (req, res) => {
   }
 });
 
+// HR Monthly Attendance Report & Analytics Endpoint (Superadmin)
+app.get('/api/attendance/monthly-report', async (req, res) => {
+  try {
+    const { month = 'September', year = '2026' } = req.query;
+    const users = await prisma.user.findMany({
+      orderBy: { name: 'asc' }
+    });
+
+    const allAtt = await prisma.attendanceLog.findMany();
+    const allLeaves = await prisma.leaveRequest.findMany();
+    const allSalaries = await prisma.salaryRecord.findMany({
+      where: { month, year: Number(year) }
+    });
+
+    const report = users.map(user => {
+      const userAtt = allAtt.filter(a => a.userId === user.id || (user.name && a.userName?.toLowerCase() === user.name.toLowerCase()));
+      const presentCount = userAtt.filter(a => a.status === 'PRESENT').length;
+      const lateCount = userAtt.filter(a => a.status === 'LATE').length;
+      const totalLogged = presentCount + lateCount;
+      const userLeaves = allLeaves.filter(l => (l.userId === user.id || (user.name && l.userName?.toLowerCase() === user.name.toLowerCase())) && l.status === 'APPROVED').length;
+      const salRecord = allSalaries.find(s => s.userId === user.id || (user.name && s.userName?.toLowerCase() === user.name.toLowerCase()));
+
+      return {
+        userId: user.id,
+        userName: user.name,
+        email: user.email,
+        role: user.role,
+        designation: user.designation || user.role,
+        department: user.department || 'Operations',
+        totalWorkingDays: 22,
+        presentDays: totalLogged > 0 ? totalLogged : (user.role === 'EMPLOYEE' ? 18 : 22),
+        lateEntries: lateCount,
+        absentDays: Math.max(0, 22 - (totalLogged > 0 ? totalLogged : (user.role === 'EMPLOYEE' ? 18 : 22)) - userLeaves),
+        approvedLeaves: userLeaves,
+        salaryStatus: salRecord ? salRecord.status : 'PENDING',
+        baseSalary: user.salary || salRecord?.baseSalary || 45000,
+        netSalary: salRecord ? salRecord.netSalary : null,
+        salaryId: salRecord ? salRecord.id : null
+      };
+    });
+
+    return res.json({
+      success: true,
+      month,
+      year,
+      summary: {
+        totalEmployees: users.length,
+        totalPresentDays: report.reduce((sum, r) => sum + r.presentDays, 0),
+        totalLateEntries: report.reduce((sum, r) => sum + r.lateEntries, 0),
+        totalSalariesProcessed: report.filter(r => r.salaryStatus === 'PROCESSED').length
+      },
+      data: report
+    });
+  } catch (err) {
+    console.error('Monthly report error:', err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Batch Process Payroll for All Employees (Superadmin 1-Click)
+app.post('/api/payroll/generate-batch', async (req, res) => {
+  try {
+    const { month = 'September', year = '2026' } = req.body;
+    const users = await prisma.user.findMany();
+    const processedSalaries = [];
+
+    for (const user of users) {
+      const userAtt = await prisma.attendanceLog.findMany({
+        where: { userId: user.id }
+      });
+      const lateCount = userAtt.filter(a => a.status === 'LATE').length;
+      const base = Number(user.salary) || 45000;
+      const lateDeduction = lateCount * 250;
+      const otPay = 0;
+      const allow = 2500;
+      const pf = Math.round(base * 0.04);
+      const tax = Math.round(base * 0.03);
+      const net = base + otPay + allow - lateDeduction - pf - tax;
+
+      // Check existing salary record
+      const existing = await prisma.salaryRecord.findFirst({
+        where: { userId: user.id, month, year: Number(year) }
+      });
+
+      let record;
+      if (existing) {
+        record = await prisma.salaryRecord.update({
+          where: { id: existing.id },
+          data: {
+            baseSalary: base,
+            deductions: lateDeduction,
+            pfDeduction: pf,
+            taxDeduction: tax,
+            netSalary: net,
+            status: 'PROCESSED'
+          }
+        });
+      } else {
+        record = await prisma.salaryRecord.create({
+          data: {
+            userId: user.id,
+            userName: user.name,
+            month,
+            year: Number(year),
+            baseSalary: base,
+            overtimeHours: 0,
+            overtimePay: 0,
+            allowances: allow,
+            deductions: lateDeduction,
+            pfDeduction: pf,
+            taxDeduction: tax,
+            netSalary: net,
+            status: 'PROCESSED'
+          }
+        });
+      }
+      processedSalaries.push(record);
+    }
+
+    await logActivity('Super Admin', `Batch processed salary slips for ${processedSalaries.length} employees for ${month} ${year}`, 'Salary Management');
+    return res.json({
+      success: true,
+      message: `Successfully generated and processed salary slips for ${processedSalaries.length} staff members for ${month} ${year}!`,
+      data: processedSalaries
+    });
+  } catch (err) {
+    console.error('Batch salary error:', err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // ----------------------------------------------------
 // 5. Location Tracking for Service Personnel (Database)
 // ----------------------------------------------------
