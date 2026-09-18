@@ -738,7 +738,23 @@ app.get('/api/material-requests', async (req, res) => {
 
 app.post('/api/material-requests', async (req, res) => {
   try {
-    const { meetingId, itemTitle, quantity, unit, justification, expectedUsage, requestedBy } = req.body;
+    const { 
+      meetingId, 
+      subject,
+      requestedForUserId,
+      requestedForUserName,
+      priority,
+      status,
+      endDate,
+      description,
+      attachmentUrl,
+      itemTitle, 
+      quantity, 
+      unit, 
+      justification, 
+      expectedUsage, 
+      requestedBy 
+    } = req.body;
 
     // Find associated meeting if valid ID
     let mtg = null;
@@ -746,24 +762,31 @@ app.post('/api/material-requests', async (req, res) => {
       mtg = await prisma.serviceMeeting.findUnique({ where: { id: meetingId } });
     }
 
-    if (!mtg) {
-      // Find or create default meeting link if no explicit meetingId passed
-      mtg = await prisma.serviceMeeting.findFirst();
+    let reqUser = null;
+    if (requestedForUserId) {
+      reqUser = await prisma.user.findUnique({ where: { id: requestedForUserId } });
     }
 
     const newReq = await prisma.materialRequest.create({
       data: {
-        meetingId: mtg ? mtg.id : 'mtg-1',
-        itemTitle,
-        quantity: Number(quantity),
+        meetingId: mtg ? mtg.id : null,
+        subject: subject || itemTitle || 'Material Request',
+        requestedForUserId: requestedForUserId || null,
+        requestedForUserName: reqUser ? reqUser.name : (requestedForUserName || requestedBy || 'Alok Naiya'),
+        priority: priority || 'Low',
+        status: status || 'Open',
+        endDate: endDate ? new Date(endDate) : null,
+        description: description || justification || '',
+        attachmentUrl: attachmentUrl || null,
+        itemTitle: itemTitle || subject || 'Required Materials',
+        quantity: quantity ? Number(quantity) : 1,
         unit: unit || 'Pcs',
-        justification,
-        expectedUsage: expectedUsage || 'Field work requirement',
-        status: 'PENDING_MASTER_ADMIN'
+        justification: justification || description || 'Field work requirement',
+        expectedUsage: expectedUsage || 'Field work requirement'
       }
     });
 
-    await logActivity(requestedBy || 'Service Personnel', `Submitted material request for ${quantity}x ${itemTitle}`, 'Material Requests');
+    await logActivity(requestedBy || 'Service Personnel', `Submitted material request "${newReq.subject}"`, 'Material Requests');
     return res.status(201).json({ success: true, data: newReq });
   } catch (err) {
     console.error('Material request error:', err);
@@ -1765,21 +1788,47 @@ app.put('/api/meetings/:id', async (req, res) => {
   }
 });
 
-// Update Material Request details
 app.put('/api/material-requests/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { itemTitle, quantity, unit, justification, expectedUsage, status } = req.body;
+    const { 
+      subject,
+      requestedForUserId,
+      requestedForUserName,
+      priority,
+      status,
+      endDate,
+      description,
+      attachmentUrl,
+      itemTitle, 
+      quantity, 
+      unit, 
+      justification, 
+      expectedUsage 
+    } = req.body;
+
+    let reqUser = null;
+    if (requestedForUserId) {
+      reqUser = await prisma.user.findUnique({ where: { id: requestedForUserId } });
+    }
 
     const updated = await prisma.materialRequest.update({
       where: { id },
       data: {
+        ...(subject !== undefined && { subject }),
+        ...(requestedForUserId !== undefined && { requestedForUserId }),
+        ...(reqUser && { requestedForUserName: reqUser.name }),
+        ...(!reqUser && requestedForUserName && { requestedForUserName }),
+        ...(priority && { priority }),
+        ...(status && { status }),
+        ...(endDate !== undefined && { endDate: endDate ? new Date(endDate) : null }),
+        ...(description !== undefined && { description }),
+        ...(attachmentUrl !== undefined && { attachmentUrl }),
         ...(itemTitle && { itemTitle }),
-        ...(quantity && { quantity: Number(quantity) }),
+        ...(quantity !== undefined && { quantity: Number(quantity) }),
         ...(unit && { unit }),
-        ...(justification && { justification }),
-        ...(expectedUsage !== undefined && { expectedUsage }),
-        ...(status && { status })
+        ...(justification !== undefined && { justification }),
+        ...(expectedUsage !== undefined && { expectedUsage })
       }
     });
 
