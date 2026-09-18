@@ -836,7 +836,12 @@ app.patch('/api/material-requests/:id/approve', async (req, res) => {
 // ----------------------------------------------------
 app.get('/api/attendance', async (req, res) => {
   try {
+    const { userId } = req.query;
+    const whereClause = {};
+    if (userId) whereClause.userId = userId;
+
     const attendance = await prisma.attendanceLog.findMany({
+      where: whereClause,
       orderBy: { date: 'desc' }
     });
     return res.json({ success: true, data: attendance });
@@ -849,23 +854,32 @@ app.post('/api/attendance/check-in', async (req, res) => {
   try {
     const { userId, userName, location, method } = req.body;
 
-    // Find or fallback to first user
-    let user = await prisma.user.findUnique({ where: { id: userId || 'usr-4' } });
+    let user = null;
+    if (userId) {
+      user = await prisma.user.findUnique({ where: { id: userId } });
+    }
     if (!user) user = await prisma.user.findFirst();
+
+    const now = new Date();
+    const currentHours = now.getHours();
+    const currentMinutes = now.getMinutes();
+    // Late check: after 09:30 AM
+    const isLate = currentHours > 9 || (currentHours === 9 && currentMinutes > 30);
+    const status = isLate ? 'LATE' : 'PRESENT';
 
     const newAtt = await prisma.attendanceLog.create({
       data: {
-        userId: user ? user.id : 'usr-4',
+        userId: user ? user.id : (userId || 'usr-4'),
         userName: userName || (user ? user.name : 'Staff Member'),
-        date: new Date(),
-        checkInTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        status: 'PRESENT',
-        location: location || 'Field Site',
+        date: now,
+        checkInTime: now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        status,
+        location: location || 'VS DIGITECH HO Dumdum',
         method: method || 'WEB'
       }
     });
 
-    await logActivity(newAtt.userName, `Checked in via ${method} at ${location || 'Site'}`, 'Attendance');
+    await logActivity(newAtt.userName, `Checked in (${status}) via ${method} at ${location || 'Site'}`, 'Attendance');
     return res.status(201).json({ success: true, data: newAtt });
   } catch (err) {
     console.error('Check-in error:', err);
@@ -875,7 +889,12 @@ app.post('/api/attendance/check-in', async (req, res) => {
 
 app.get('/api/leaves', async (req, res) => {
   try {
+    const { userId } = req.query;
+    const whereClause = {};
+    if (userId) whereClause.userId = userId;
+
     const leaves = await prisma.leaveRequest.findMany({
+      where: whereClause,
       orderBy: { createdAt: 'desc' }
     });
     return res.json({ success: true, data: leaves });
@@ -887,17 +906,20 @@ app.get('/api/leaves', async (req, res) => {
 app.post('/api/leaves', async (req, res) => {
   try {
     const { userId, userName, leaveType, startDate, endDate, reason } = req.body;
-    let user = await prisma.user.findUnique({ where: { id: userId || 'usr-4' } });
+    let user = null;
+    if (userId) {
+      user = await prisma.user.findUnique({ where: { id: userId } });
+    }
     if (!user) user = await prisma.user.findFirst();
 
     const newLeave = await prisma.leaveRequest.create({
       data: {
-        userId: user ? user.id : 'usr-4',
+        userId: user ? user.id : (userId || 'usr-4'),
         userName: userName || (user ? user.name : 'Staff Member'),
         leaveType: leaveType || 'CASUAL',
         startDate: new Date(startDate || Date.now()),
         endDate: new Date(endDate || Date.now()),
-        reason,
+        reason: reason || 'Personal work',
         status: 'PENDING'
       }
     });
@@ -946,7 +968,12 @@ app.get('/api/shifts', async (req, res) => {
 // ----------------------------------------------------
 app.get('/api/payroll', async (req, res) => {
   try {
+    const { userId } = req.query;
+    const whereClause = {};
+    if (userId) whereClause.userId = userId;
+
     const records = await prisma.salaryRecord.findMany({
+      where: whereClause,
       orderBy: { generatedAt: 'desc' }
     });
     return res.json({ success: true, data: records });
@@ -958,20 +985,35 @@ app.get('/api/payroll', async (req, res) => {
 app.post('/api/payroll/calculate', async (req, res) => {
   try {
     const { userId, userName, month, year, baseSalary, overtimeHours, allowances, deductions } = req.body;
-    let user = await prisma.user.findUnique({ where: { id: userId || 'usr-4' } });
+    let user = null;
+    if (userId) {
+      user = await prisma.user.findUnique({ where: { id: userId } });
+    }
     if (!user) user = await prisma.user.findFirst();
 
-    const base = Number(baseSalary) || 40000;
+    // Query user attendance to calculate late deductions
+    let lateDeduction = 0;
+    try {
+      const attLogs = await prisma.attendanceLog.findMany({
+        where: { userId: user ? user.id : userId }
+      });
+      const lateCount = attLogs.filter(a => a.status === 'LATE' || a.status === 'Late').length;
+      lateDeduction = lateCount * 250; // 250 per late entry
+    } catch (e) {}
+
+    const base = Number(baseSalary) || 45000;
     const ot = (Number(overtimeHours) || 0) * 350;
-    const allow = Number(allowances) || 2000;
-    const ded = Number(deductions) || 1500;
+    const allow = Number(allowances) || 2500;
+    const manualDed = Number(deductions) || 1000;
+    const totalDed = manualDed + lateDeduction;
+
     const pf = Math.round(base * 0.04);
     const tax = Math.round(base * 0.03);
-    const net = base + ot + allow - ded - pf - tax;
+    const net = base + ot + allow - totalDed - pf - tax;
 
     const newSal = await prisma.salaryRecord.create({
       data: {
-        userId: user ? user.id : 'usr-4',
+        userId: user ? user.id : (userId || 'usr-4'),
         userName: userName || (user ? user.name : 'Staff Member'),
         month: month || 'September',
         year: Number(year) || 2026,
@@ -979,7 +1021,7 @@ app.post('/api/payroll/calculate', async (req, res) => {
         overtimeHours: Number(overtimeHours) || 0,
         overtimePay: ot,
         allowances: allow,
-        deductions: ded,
+        deductions: totalDed,
         pfDeduction: pf,
         taxDeduction: tax,
         netSalary: net,
@@ -987,7 +1029,7 @@ app.post('/api/payroll/calculate', async (req, res) => {
       }
     });
 
-    await logActivity('Master Admin', `Generated salary slip for ${newSal.userName} (${month} ${year})`, 'Salary Management');
+    await logActivity('Master Admin', `Generated salary slip for ${newSal.userName} (${month} ${year}) - Net ₹${net}`, 'Salary Management');
     return res.status(201).json({ success: true, data: newSal });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
