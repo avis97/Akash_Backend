@@ -518,6 +518,7 @@ app.delete('/api/employees/:id', authenticateToken, requireSuperAdmin, async (re
     console.error('Delete employee error:', err);
     return res.status(500).json({ success: false, message: err.message || 'Error deleting employee' });
   }
+});
 // ----------------------------------------------------
 // Projects Management Endpoints
 // ----------------------------------------------------
