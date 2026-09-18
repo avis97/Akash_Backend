@@ -103,6 +103,8 @@ model User {
   activityLogs     ActivityLog[]
   quotations       Quotation[]         @relation("ClientQuotations")
   invoices         Invoice[]           @relation("ClientInvoices")
+  projectsAsCustomer Project[]         @relation("CustomerProjects")
+  projectsAsEmployee Project[]         @relation("EmployeeProjects")
 }
 
 model ActivityLog {
@@ -119,8 +121,14 @@ model ActivityLog {
 model ServiceMeeting {
   id              String   @id @default(uuid())
   title           String
+  branch          String?
+  department      String?
+  project         String?
   clientName      String
   clientAddress   String
+  location        String?
+  meetingFeedback String?
+  photos          String?  // Stored as JSON string array of base64/URL images
   scheduledAt     DateTime
   status          String   @default("SCHEDULED") // SCHEDULED, IN_PROGRESS, COMPLETED, CANCELLED
   assignedToId    String?
@@ -377,3 +385,25 @@ model AMCChecklist {
   isCompleted Boolean @default(false)
   remarks     String?
 }
+
+model Project {
+  id             String    @id @default(uuid())
+  name           String
+  startDate      DateTime?
+  endDate        DateTime?
+  image          String?
+  customerId     String?
+  customer       User?     @relation("CustomerProjects", fields: [customerId], references: [id], onDelete: SetNull)
+  customerName   String?
+  employeeId     String?
+  employee       User?     @relation("EmployeeProjects", fields: [employeeId], references: [id], onDelete: SetNull)
+  employeeName   String?
+  budget         Float?
+  estimatedHours Float?
+  description    String?
+  tag            String?
+  status         String    @default("In Progress") // Not Started, In Progress, Completed, On Hold, Cancelled
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+}
+

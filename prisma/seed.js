@@ -55,12 +55,25 @@ async function main() {
   for (const m of mockData.mockMeetings) {
     await prisma.serviceMeeting.upsert({
       where: { id: m.id },
-      update: {},
+      update: {
+        branch: m.branch || 'Main Branch - Kolkata',
+        department: m.department || 'Field Engineering & Support',
+        project: m.project || 'Field Service Project',
+        location: m.location || null,
+        meetingFeedback: m.meetingFeedback || null,
+        photos: m.photos || null
+      },
       create: {
         id: m.id,
         title: m.title || `Service Visit: ${m.clientName || m.client}`,
+        branch: m.branch || 'Main Branch - Kolkata',
+        department: m.department || 'Field Engineering & Support',
+        project: m.project || 'Field Service Project',
         clientName: m.clientName || m.client || 'Client Corp',
         clientAddress: m.clientAddress || 'Kolkata Site',
+        location: m.location || null,
+        meetingFeedback: m.meetingFeedback || null,
+        photos: m.photos || null,
         scheduledAt: new Date(m.scheduledAt || Date.now()),
         status: m.status || 'SCHEDULED',
         assignedToId: m.assignedToId || null,
@@ -318,7 +331,32 @@ async function main() {
       }
     });
   }
-  console.log('✅ Activity Logs seeded into database');
+  // 11. Projects
+  if (mockData.mockProjects && mockData.mockProjects.length > 0) {
+    for (const proj of mockData.mockProjects) {
+      await prisma.project.upsert({
+        where: { id: proj.id },
+        update: {},
+        create: {
+          id: proj.id,
+          name: proj.name,
+          startDate: proj.startDate ? new Date(proj.startDate) : null,
+          endDate: proj.endDate ? new Date(proj.endDate) : null,
+          image: proj.image || null,
+          customerId: proj.customerId || null,
+          customerName: proj.customerName || null,
+          employeeId: proj.employeeId || null,
+          employeeName: proj.employeeName || null,
+          budget: Number(proj.budget) || null,
+          estimatedHours: Number(proj.estimatedHours) || null,
+          description: proj.description || null,
+          tag: proj.tag || null,
+          status: proj.status || 'In Progress'
+        }
+      });
+    }
+    console.log('✅ Projects seeded into database');
+  }
 
   console.log('🎉 Full Akash CRM Database Seeding completed successfully!');
 }

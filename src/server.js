@@ -518,6 +518,124 @@ app.delete('/api/employees/:id', authenticateToken, requireSuperAdmin, async (re
     console.error('Delete employee error:', err);
     return res.status(500).json({ success: false, message: err.message || 'Error deleting employee' });
   }
+// ----------------------------------------------------
+// Projects Management Endpoints
+// ----------------------------------------------------
+app.get('/api/projects', async (req, res) => {
+  try {
+    const { employeeId, customerId } = req.query;
+    const whereClause = {};
+    if (employeeId) whereClause.employeeId = employeeId;
+    if (customerId) whereClause.customerId = customerId;
+
+    let projects = [];
+    try {
+      projects = await prisma.project.findMany({
+        where: whereClause,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          employee: { select: { id: true, name: true, email: true, designation: true } },
+          customer: { select: { id: true, name: true, email: true } }
+        }
+      });
+    } catch (dbErr) {
+      projects = mockData.mockProjects || [];
+    }
+    return res.json({ success: true, data: projects });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.post('/api/projects', async (req, res) => {
+  try {
+    const { name, startDate, endDate, image, customerId, customerName, employeeId, employeeName, budget, estimatedHours, description, tag, status } = req.body;
+
+    let empUser = null;
+    if (employeeId) {
+      empUser = await prisma.user.findUnique({ where: { id: employeeId } });
+    }
+    let custUser = null;
+    if (customerId) {
+      custUser = await prisma.user.findUnique({ where: { id: customerId } });
+    }
+
+    const newProject = await prisma.project.create({
+      data: {
+        name,
+        startDate: startDate ? new Date(startDate) : null,
+        endDate: endDate ? new Date(endDate) : null,
+        image: image || null,
+        customerId: customerId || null,
+        customerName: custUser ? custUser.name : (customerName || null),
+        employeeId: employeeId || null,
+        employeeName: empUser ? empUser.name : (employeeName || null),
+        budget: budget ? parseFloat(budget) : null,
+        estimatedHours: estimatedHours ? parseFloat(estimatedHours) : null,
+        description: description || null,
+        tag: tag || null,
+        status: status || 'In Progress'
+      }
+    });
+
+    await logActivity('System', `Created new project: ${name}`, 'Project Management');
+    return res.status(201).json({ success: true, data: newProject });
+  } catch (err) {
+    console.error('Error creating project:', err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.put('/api/projects/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, startDate, endDate, image, customerId, customerName, employeeId, employeeName, budget, estimatedHours, description, tag, status } = req.body;
+
+    let empUser = null;
+    if (employeeId) {
+      empUser = await prisma.user.findUnique({ where: { id: employeeId } });
+    }
+    let custUser = null;
+    if (customerId) {
+      custUser = await prisma.user.findUnique({ where: { id: customerId } });
+    }
+
+    const updated = await prisma.project.update({
+      where: { id },
+      data: {
+        ...(name !== undefined && { name }),
+        ...(startDate !== undefined && { startDate: startDate ? new Date(startDate) : null }),
+        ...(endDate !== undefined && { endDate: endDate ? new Date(endDate) : null }),
+        ...(image !== undefined && { image }),
+        ...(customerId !== undefined && { customerId }),
+        ...(customerName !== undefined || custUser ? { customerName: custUser ? custUser.name : customerName } : {}),
+        ...(employeeId !== undefined && { employeeId }),
+        ...(employeeName !== undefined || empUser ? { employeeName: empUser ? empUser.name : employeeName } : {}),
+        ...(budget !== undefined && { budget: budget ? parseFloat(budget) : null }),
+        ...(estimatedHours !== undefined && { estimatedHours: estimatedHours ? parseFloat(estimatedHours) : null }),
+        ...(description !== undefined && { description }),
+        ...(tag !== undefined && { tag }),
+        ...(status !== undefined && { status })
+      }
+    });
+
+    await logActivity('System', `Updated project #${id}: ${updated.name}`, 'Project Management');
+    return res.json({ success: true, data: updated });
+  } catch (err) {
+    console.error('Error updating project:', err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.delete('/api/projects/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await prisma.project.delete({ where: { id } });
+    await logActivity('Admin', `Deleted project #${id}`, 'Project Management');
+    return res.json({ success: true, message: 'Project deleted successfully' });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
 });
 
 // ----------------------------------------------------
@@ -545,7 +663,7 @@ app.get('/api/meetings', async (req, res) => {
 
 app.post('/api/meetings', async (req, res) => {
   try {
-    const { title, clientName, clientAddress, scheduledAt, assignedToId, agenda, deliverables } = req.body;
+    const { title, branch, department, project, clientName, clientAddress, location, meetingFeedback, photos, scheduledAt, assignedToId, agenda, deliverables, status } = req.body;
     let assignedUser = null;
     if (assignedToId) {
       assignedUser = await prisma.user.findUnique({ where: { id: assignedToId } });
@@ -554,10 +672,16 @@ app.post('/api/meetings', async (req, res) => {
     const newMeeting = await prisma.serviceMeeting.create({
       data: {
         title,
+        branch: branch || null,
+        department: department || null,
+        project: project || null,
         clientName,
         clientAddress,
+        location: location || null,
+        meetingFeedback: meetingFeedback || null,
+        photos: Array.isArray(photos) ? JSON.stringify(photos) : (typeof photos === 'string' ? photos : null),
         scheduledAt: scheduledAt ? new Date(scheduledAt) : new Date(),
-        status: 'SCHEDULED',
+        status: status || 'SCHEDULED',
         assignedToId: assignedToId || null,
         assignedToName: assignedUser ? assignedUser.name : 'Unassigned Personnel',
         agenda: agenda || 'Routine service audit',
@@ -1596,7 +1720,7 @@ app.delete('/api/leaves/:id', async (req, res) => {
 app.put('/api/meetings/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { title, clientName, clientAddress, scheduledAt, assignedToId, agenda, deliverables, status, outcomeNotes, serviceUpdates } = req.body;
+    const { title, branch, department, project, clientName, clientAddress, location, meetingFeedback, photos, scheduledAt, assignedToId, agenda, deliverables, status, outcomeNotes, serviceUpdates } = req.body;
 
     const targetAssignedId = (assignedToId === '' || assignedToId === null) ? null : assignedToId;
     let assignedUser = null;
@@ -1605,13 +1729,20 @@ app.put('/api/meetings/:id', async (req, res) => {
     }
 
     const scheduledDate = scheduledAt && !isNaN(new Date(scheduledAt).getTime()) ? new Date(scheduledAt) : undefined;
+    const formattedPhotos = Array.isArray(photos) ? JSON.stringify(photos) : (typeof photos === 'string' ? photos : undefined);
 
     const updated = await prisma.serviceMeeting.update({
       where: { id },
       data: {
         ...(title !== undefined && { title }),
+        ...(branch !== undefined && { branch }),
+        ...(department !== undefined && { department }),
+        ...(project !== undefined && { project }),
         ...(clientName !== undefined && { clientName }),
         ...(clientAddress !== undefined && { clientAddress }),
+        ...(location !== undefined && { location }),
+        ...(meetingFeedback !== undefined && { meetingFeedback }),
+        ...(formattedPhotos !== undefined && { photos: formattedPhotos }),
         ...(scheduledDate !== undefined && { scheduledAt: scheduledDate }),
         ...(targetAssignedId !== undefined && { assignedToId: targetAssignedId }),
         ...(targetAssignedId !== undefined && { 

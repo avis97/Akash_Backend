@@ -84,8 +84,14 @@ const mockMeetings = [
   {
     id: "mtg-101",
     title: "Quarterly Server Rack Maintenance & Fiber Splicing",
+    branch: "Main Branch - Kolkata",
+    department: "IT & Network Operations",
+    project: "TCS Fiber Infrastructure Maintenance",
     clientName: "TCS Salt Lake Campus II",
     clientAddress: "Block EP & GP, Sector V, Salt Lake, Kolkata 700091",
+    location: "Server Room 3B, TCS Sector V",
+    meetingFeedback: "Client requested additional fiber splice tray backup for next quarter audit.",
+    photos: JSON.stringify(["https://images.unsplash.com/photo-1558494949-ef010cbdcc31?w=400"]),
     scheduledAt: "2026-09-03T10:00:00.000Z",
     status: "SCHEDULED",
     assignedToId: "usr-4",
@@ -98,8 +104,14 @@ const mockMeetings = [
   {
     id: "mtg-102",
     title: "CCTV Camera Calibration & Biometric Controller Setup",
+    branch: "Sector V Tech Office",
+    department: "Field Engineering & Support",
+    project: "Wipro Surveillance Installation",
     clientName: "Wipro Tech Park",
     clientAddress: "Plot 8, Block DM, Sector V, Bidhannagar, Kolkata 700091",
+    location: "Gate 2 ANPR Control Tower",
+    meetingFeedback: "10 cameras successfully installed. POE switch replacement needed for remaining 2 cameras.",
+    photos: JSON.stringify(["https://images.unsplash.com/photo-1557597774-9d273605dfa9?w=400"]),
     scheduledAt: "2026-09-02T14:30:00.000Z",
     status: "IN_PROGRESS",
     assignedToId: "usr-5",
@@ -112,8 +124,14 @@ const mockMeetings = [
   {
     id: "mtg-103",
     title: "Annual Fire Alarm & Access Control Audit",
+    branch: "Corporate HQ",
+    department: "Electrical & Automation",
+    project: "CTS Fire Safety AMC Audit",
     clientName: "Cognizant Technology Solutions",
     clientAddress: "Vidyasagar Complex, Salt Lake Sector V, Kolkata",
+    location: "Main Electrical Control Room & Fire Panel",
+    meetingFeedback: "All smoke detectors and fire panel batteries passed safety inspection.",
+    photos: JSON.stringify(["https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=400"]),
     scheduledAt: "2026-09-01T11:00:00.000Z",
     status: "COMPLETED",
     assignedToId: "usr-4",
@@ -615,6 +633,55 @@ const mockActivityLogs = [
     ipAddress: "182.74.12.98",
     timestamp: "2026-09-02T15:10:00.000Z"
   }
+const mockProjects = [
+  {
+    id: "proj-1",
+    name: "TCS Salt Lake Optical Fiber Splicing & Core Upgrade",
+    startDate: "2026-08-01",
+    endDate: "2026-10-31",
+    image: "https://images.unsplash.com/photo-1558494949-ef010cbdcc31?w=500",
+    customerId: "usr-normaluser",
+    customerName: "TCS Consultancy Services",
+    employeeId: "usr-4",
+    employeeName: "Sujan Mukhopadhyay",
+    budget: 250000,
+    estimatedHours: 160,
+    description: "Full fiber splicing, core switch installation, and diagnostic testing for TCS Campus II.",
+    tag: "Networking & Fiber",
+    status: "In Progress"
+  },
+  {
+    id: "proj-2",
+    name: "Wipro ANPR Surveillance & Gate Biometrics",
+    startDate: "2026-08-15",
+    endDate: "2026-11-15",
+    image: "https://images.unsplash.com/photo-1557597774-9d273605dfa9?w=500",
+    customerId: "usr-normaluser",
+    customerName: "Wipro Tech Park",
+    employeeId: "usr-5",
+    employeeName: "Rajesh Kumar",
+    budget: 180000,
+    estimatedHours: 120,
+    description: "Installation of 12 IP cameras, ANPR controller setup at Gate 2, biometric integration.",
+    tag: "CCTV & Security",
+    status: "In Progress"
+  },
+  {
+    id: "proj-3",
+    name: "Cognizant Annual Fire Alarm & Access Audit",
+    startDate: "2026-07-01",
+    endDate: "2026-09-01",
+    image: "https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=500",
+    customerId: "usr-normaluser",
+    customerName: "Cognizant Technology Solutions",
+    employeeId: "usr-4",
+    employeeName: "Sujan Mukhopadhyay",
+    budget: 95000,
+    estimatedHours: 60,
+    description: "Fire panel testing, smoke detector calibration, access control system compliance audit.",
+    tag: "Safety & Audit",
+    status: "Completed"
+  }
 ];
 
 module.exports = {
@@ -633,5 +700,6 @@ module.exports = {
   mockPurchases,
   mockVouchers,
   mockSiteAMCs,
-  mockActivityLogs
+  mockActivityLogs,
+  mockProjects
 };
