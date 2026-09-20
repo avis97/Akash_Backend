@@ -1120,6 +1120,11 @@ app.get('/api/attendance/monthly-report', async (req, res) => {
   try {
     const { month = 'September', year = '2026' } = req.query;
     const users = await prisma.user.findMany({
+      where: {
+        role: {
+          notIn: ['CLIENT', 'USER']
+        }
+      },
       orderBy: { name: 'asc' }
     });
 
@@ -1195,7 +1200,13 @@ app.get('/api/attendance/monthly-report', async (req, res) => {
 app.post('/api/payroll/generate-batch', async (req, res) => {
   try {
     const { month = 'September', year = '2026' } = req.body;
-    const users = await prisma.user.findMany();
+    const users = await prisma.user.findMany({
+      where: {
+        role: {
+          notIn: ['CLIENT', 'USER']
+        }
+      }
+    });
     const processedSalaries = [];
 
     for (const user of users) {
