@@ -325,7 +325,7 @@ async function handleCreateUserOrEmployee(req, res) {
   try {
     const {
       name, email, password, phone, designation, role,
-      employeeId, dob, gender, address, branch, department, dateOfJoining,
+      employeeId, basicSalary, dob, gender, address, branch, department, dateOfJoining,
       hsCertificate, panCard, aadhaarCard, passport, graduation, experienceLetter, addressProof,
       accountHolderName, accountNumber, bankName, bankIdentifierCode, branchLocation
     } = req.body;
@@ -357,6 +357,7 @@ async function handleCreateUserOrEmployee(req, res) {
         isMfaEnabled: false,
         avatarUrl: `https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150`,
         employeeId: finalEmployeeId,
+        basicSalary: basicSalary ? Number(basicSalary) : 30000,
         dob: dob || null,
         gender: gender || 'Male',
         address: address || null,
@@ -409,7 +410,7 @@ app.put('/api/users/:id', authenticateToken, requireSuperAdmin, async (req, res)
     const { id } = req.params;
     const {
       name, email, password, phone, designation, role, avatarUrl,
-      employeeId, dob, gender, address, branch, department, dateOfJoining,
+      employeeId, basicSalary, dob, gender, address, branch, department, dateOfJoining,
       hsCertificate, panCard, aadhaarCard, passport, graduation, experienceLetter, addressProof,
       accountHolderName, accountNumber, bankName, bankIdentifierCode, branchLocation
     } = req.body;
@@ -434,6 +435,7 @@ app.put('/api/users/:id', authenticateToken, requireSuperAdmin, async (req, res)
       ...(role && { role }),
       ...(avatarUrl !== undefined && { avatarUrl }),
       ...(employeeId !== undefined && { employeeId }),
+      ...(basicSalary !== undefined && { basicSalary: Number(basicSalary) }),
       ...(dob !== undefined && { dob }),
       ...(gender !== undefined && { gender }),
       ...(address !== undefined && { address }),
@@ -469,6 +471,29 @@ app.put('/api/users/:id', authenticateToken, requireSuperAdmin, async (req, res)
   } catch (err) {
     console.error('Update user error:', err);
     return res.status(500).json({ success: false, message: err.message || 'Error updating user' });
+  }
+});
+
+// Dedicated endpoint to update employee basic salary
+app.patch('/api/users/:id/basic-salary', authenticateToken, requireSuperAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { basicSalary } = req.body;
+
+    if (basicSalary === undefined || isNaN(Number(basicSalary))) {
+      return res.status(400).json({ success: false, message: 'Valid basic salary number is required' });
+    }
+
+    const updatedUser = await prisma.user.update({
+      where: { id },
+      data: { basicSalary: Number(basicSalary) }
+    });
+
+    await logActivity(req.user?.name || 'Superadmin', `Set basic salary for ${updatedUser.name} to ₹${basicSalary}`, 'Salary Management');
+    return res.json({ success: true, message: `Basic salary updated to ₹${basicSalary}`, data: updatedUser });
+  } catch (err) {
+    console.error('Update basic salary error:', err);
+    return res.status(500).json({ success: false, message: err.message });
   }
 });
 
@@ -540,7 +565,7 @@ app.get('/api/projects', async (req, res) => {
         }
       });
     } catch (dbErr) {
-      projects = mockData.mockProjects || [];
+      projects = [];
     }
     return res.json({ success: true, data: projects });
   } catch (err) {
@@ -852,7 +877,7 @@ app.get('/api/attendance', async (req, res) => {
 
 app.post('/api/attendance/check-in', async (req, res) => {
   try {
-    const { userId, userName, location, method } = req.body;
+    const { userId, userName, location, method, latitude, longitude } = req.body;
 
     let user = null;
     if (userId) {
@@ -860,26 +885,78 @@ app.post('/api/attendance/check-in', async (req, res) => {
     }
     if (!user) user = await prisma.user.findFirst();
 
+    const effectiveUserId = user ? user.id : (userId || 'usr-4');
+    const effectiveUserName = userName || (user ? user.name : 'Staff Member');
+
     const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+    const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+
+    // Single punch per day check
+    const existingPunch = await prisma.attendanceLog.findFirst({
+      where: {
+        userId: effectiveUserId,
+        date: {
+          gte: startOfDay,
+          lte: endOfDay
+        }
+      }
+    });
+
+    if (existingPunch) {
+      return res.status(400).json({
+        success: false,
+        message: `Attendance has already been punched today at ${existingPunch.checkInTime || 'earlier time'}. Multiple punches on the same day are not allowed.`
+      });
+    }
+
     const currentHours = now.getHours();
     const currentMinutes = now.getMinutes();
     // Late check: after 09:30 AM
     const isLate = currentHours > 9 || (currentHours === 9 && currentMinutes > 30);
     const status = isLate ? 'LATE' : 'PRESENT';
 
+    let finalLocation = location;
+    if (!finalLocation || finalLocation === 'VS DIGITECH HO Dumdum') {
+      if (latitude && longitude) {
+        finalLocation = `GPS (${Number(latitude).toFixed(4)}, ${Number(longitude).toFixed(4)})`;
+      } else {
+        finalLocation = 'Office HO (Web Punch)';
+      }
+    }
+
     const newAtt = await prisma.attendanceLog.create({
       data: {
-        userId: user ? user.id : (userId || 'usr-4'),
-        userName: userName || (user ? user.name : 'Staff Member'),
+        userId: effectiveUserId,
+        userName: effectiveUserName,
         date: now,
         checkInTime: now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         status,
-        location: location || 'VS DIGITECH HO Dumdum',
+        location: finalLocation,
         method: method || 'WEB'
       }
     });
 
-    await logActivity(newAtt.userName, `Checked in (${status}) via ${method} at ${location || 'Site'}`, 'Attendance');
+    if (latitude && longitude && effectiveUserId) {
+      try {
+        await prisma.personnelLocation.create({
+          data: {
+            userId: effectiveUserId,
+            userName: effectiveUserName,
+            latitude: Number(latitude),
+            longitude: Number(longitude),
+            address: finalLocation,
+            batteryLevel: 100,
+            speed: 0,
+            updatedAt: now
+          }
+        });
+      } catch (locErr) {
+        console.warn('PersonnelLocation tracking update notice:', locErr.message);
+      }
+    }
+
+    await logActivity(newAtt.userName, `Checked in (${status}) via ${method} at ${finalLocation}`, 'Attendance');
     return res.status(201).json({ success: true, data: newAtt });
   } catch (err) {
     console.error('Check-in error:', err);
@@ -1001,10 +1078,10 @@ app.post('/api/payroll/calculate', async (req, res) => {
       lateDeduction = lateCount * 250; // 250 per late entry
     } catch (e) {}
 
-    const base = Number(baseSalary) || 45000;
+    const base = Number(baseSalary) || Number(user?.basicSalary) || 30000;
     const ot = (Number(overtimeHours) || 0) * 350;
     const allow = Number(allowances) || 2500;
-    const manualDed = Number(deductions) || 1000;
+    const manualDed = Number(deductions) || 0;
     const totalDed = manualDed + lateDeduction;
 
     const pf = Math.round(base * 0.04);
@@ -1029,7 +1106,7 @@ app.post('/api/payroll/calculate', async (req, res) => {
       }
     });
 
-    await logActivity('Master Admin', `Generated salary slip for ${newSal.userName} (${month} ${year}) - Net ₹${net}`, 'Salary Management');
+    await logActivity('Superadmin', `Generated salary slip for ${newSal.userName} (${month} ${year}) - Base ₹${base}, Net ₹${net}`, 'Salary Management');
     return res.status(201).json({ success: true, data: newSal });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
@@ -1044,10 +1121,27 @@ app.get('/api/attendance/monthly-report', async (req, res) => {
       orderBy: { name: 'asc' }
     });
 
-    const allAtt = await prisma.attendanceLog.findMany();
+    const monthMap = {
+      'January': 0, 'February': 1, 'March': 2, 'April': 3, 'May': 4, 'June': 5,
+      'July': 6, 'August': 7, 'September': 8, 'October': 9, 'November': 10, 'December': 11
+    };
+    const mIndex = monthMap[month] !== undefined ? monthMap[month] : 8;
+    const yr = Number(year) || 2026;
+    const startDate = new Date(yr, mIndex, 1, 0, 0, 0);
+    const endDate = new Date(yr, mIndex + 1, 0, 23, 59, 59);
+
+    const allAtt = await prisma.attendanceLog.findMany({
+      where: {
+        date: {
+          gte: startDate,
+          lte: endDate
+        }
+      }
+    });
+
     const allLeaves = await prisma.leaveRequest.findMany();
     const allSalaries = await prisma.salaryRecord.findMany({
-      where: { month, year: Number(year) }
+      where: { month, year: yr }
     });
 
     const report = users.map(user => {
@@ -1066,12 +1160,12 @@ app.get('/api/attendance/monthly-report', async (req, res) => {
         designation: user.designation || user.role,
         department: user.department || 'Operations',
         totalWorkingDays: 22,
-        presentDays: totalLogged > 0 ? totalLogged : (user.role === 'EMPLOYEE' ? 18 : 22),
+        presentDays: totalLogged,
         lateEntries: lateCount,
-        absentDays: Math.max(0, 22 - (totalLogged > 0 ? totalLogged : (user.role === 'EMPLOYEE' ? 18 : 22)) - userLeaves),
+        absentDays: Math.max(0, 22 - totalLogged - userLeaves),
         approvedLeaves: userLeaves,
         salaryStatus: salRecord ? salRecord.status : 'PENDING',
-        baseSalary: user.salary || salRecord?.baseSalary || 45000,
+        baseSalary: user.basicSalary || salRecord?.baseSalary || 30000,
         netSalary: salRecord ? salRecord.netSalary : null,
         salaryId: salRecord ? salRecord.id : null
       };
@@ -1107,7 +1201,7 @@ app.post('/api/payroll/generate-batch', async (req, res) => {
         where: { userId: user.id }
       });
       const lateCount = userAtt.filter(a => a.status === 'LATE').length;
-      const base = Number(user.salary) || 45000;
+      const base = Number(user.basicSalary) || 30000;
       const lateDeduction = lateCount * 250;
       const otPay = 0;
       const allow = 2500;

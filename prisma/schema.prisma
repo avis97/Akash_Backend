@@ -65,6 +65,7 @@ model User {
 
   // Employee Personal & Company Details
   employeeId           String?   @unique
+  basicSalary          Float?    @default(30000)
   dob                  String?
   gender               String?
   address              String?

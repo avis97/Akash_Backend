@@ -54,7 +54,8 @@ const mockUsers = [
     designation: "Facility Manager",
     role: "FACILITY_MANAGER",
     isMfaEnabled: false,
-    avatarUrl: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150"
+    avatarUrl: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150",
+    basicSalary: 45000
   },
   {
     id: "usr-4",
@@ -65,7 +66,8 @@ const mockUsers = [
     designation: "Senior Field Engineer",
     role: "SERVICE_PERSONNEL",
     isMfaEnabled: true,
-    avatarUrl: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150"
+    avatarUrl: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150",
+    basicSalary: 38000
   },
   {
     id: "usr-5",
@@ -76,7 +78,8 @@ const mockUsers = [
     designation: "HVAC & Network Technician",
     role: "SERVICE_PERSONNEL",
     isMfaEnabled: false,
-    avatarUrl: "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=150"
+    avatarUrl: "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=150",
+    basicSalary: 32000
   }
 ];
 
@@ -633,6 +636,8 @@ const mockActivityLogs = [
     ipAddress: "182.74.12.98",
     timestamp: "2026-09-02T15:10:00.000Z"
   }
+];
+
 const mockProjects = [
   {
     id: "proj-1",
