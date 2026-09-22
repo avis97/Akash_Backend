@@ -984,6 +984,60 @@ app.get('/api/attendance', async (req, res) => {
   }
 });
 
+app.get('/api/attendance/status', async (req, res) => {
+  try {
+    const { userId, userName, localDateStr } = req.query;
+    const { user, isExplicitUser } = await getValidUser(userId, userName);
+    if (!user) {
+      return res.status(400).json({ success: false, message: 'User not found' });
+    }
+
+    const now = new Date();
+    const dateStr = localDateStr || `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+    const startOfDay = new Date(dateStr);
+    const endOfDay = new Date(dateStr);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    const checkConditions = [{ userName: { equals: user.name, mode: 'insensitive' } }];
+    if (isExplicitUser) {
+      checkConditions.push({ userId: user.id });
+    }
+
+    const todaySessions = await prisma.attendanceLog.findMany({
+      where: {
+        OR: checkConditions,
+        date: { gte: startOfDay, lte: endOfDay }
+      },
+      orderBy: { checkInTime: 'asc' }
+    });
+
+    const activeSession = todaySessions.find(s => s.checkOutTime === null);
+
+    let totalMinutesWorkedToday = 0;
+    const formattedSessions = todaySessions.map(session => {
+      let sessionMinutes = session.durationMinutes || 0;
+      if (session.checkInTime && !session.checkOutTime) {
+        const diffMs = now - new Date(session.checkInTime);
+        sessionMinutes = Math.floor(diffMs / 60000);
+      }
+      totalMinutesWorkedToday += sessionMinutes;
+      return { ...session, durationMinutes: sessionMinutes };
+    });
+
+    return res.json({
+      success: true,
+      isClockedIn: Boolean(activeSession),
+      statusText: activeSession ? 'CLOCKED_IN' : 'CLOCKED_OUT',
+      activeSession: activeSession || null,
+      todaySessionsCount: todaySessions.length,
+      totalMinutesWorkedToday,
+      todaySessions: formattedSessions
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 app.post('/api/attendance/check-in', async (req, res) => {
   try {
     const { userId, userName, location, method, latitude, longitude } = req.body;
@@ -1002,10 +1056,7 @@ app.post('/api/attendance/check-in', async (req, res) => {
     const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
     const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
 
-    // Single punch per day check: match by userName OR by exact userId if explicitly matched
-    const checkConditions = [
-      { userName: { equals: effectiveUserName, mode: 'insensitive' } }
-    ];
+    const checkConditions = [{ userName: { equals: effectiveUserName, mode: 'insensitive' } }];
     if (isExplicitUser) {
       checkConditions.push({ userId: effectiveUserId });
     }
@@ -1013,23 +1064,20 @@ app.post('/api/attendance/check-in', async (req, res) => {
     const existingPunch = await prisma.attendanceLog.findFirst({
       where: {
         OR: checkConditions,
-        date: {
-          gte: startOfDay,
-          lte: endOfDay
-        }
+        date: { gte: startOfDay, lte: endOfDay },
+        checkOutTime: null
       }
     });
 
     if (existingPunch) {
       return res.status(400).json({
         success: false,
-        message: `Attendance has already been punched today at ${existingPunch.checkInTime || 'earlier time'}. Multiple punches on the same day are not allowed.`
+        message: 'You are currently clocked in. Please clock out before starting a new session.'
       });
     }
 
     const currentHours = now.getHours();
     const currentMinutes = now.getMinutes();
-    // Late check: after 09:30 AM
     const isLate = currentHours > 9 || (currentHours === 9 && currentMinutes > 30);
     const status = isLate ? 'LATE' : 'PRESENT';
 
@@ -1047,7 +1095,7 @@ app.post('/api/attendance/check-in', async (req, res) => {
         userId: effectiveUserId,
         userName: effectiveUserName,
         date: now,
-        checkInTime: now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        checkInTime: now,
         status,
         location: finalLocation,
         method: method || 'WEB'
@@ -1073,10 +1121,59 @@ app.post('/api/attendance/check-in', async (req, res) => {
       }
     }
 
-    await logActivity(newAtt.userName, `Checked in (${status}) via ${method} at ${finalLocation}`, 'Attendance');
+    await logActivity(newAtt.userName, `Clocked in (${status}) via ${method} at ${finalLocation}`, 'Attendance');
     return res.status(201).json({ success: true, data: newAtt });
   } catch (err) {
     console.error('Check-in error:', err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.post('/api/attendance/clock-out', async (req, res) => {
+  try {
+    const { userId, userName } = req.body;
+    const { user, isExplicitUser } = await getValidUser(userId, userName);
+    if (!user) {
+      return res.status(400).json({ success: false, message: 'No valid user account found in database.' });
+    }
+
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+    const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+
+    const checkConditions = [{ userName: { equals: user.name, mode: 'insensitive' } }];
+    if (isExplicitUser) {
+      checkConditions.push({ userId: user.id });
+    }
+
+    const activeSession = await prisma.attendanceLog.findFirst({
+      where: {
+        OR: checkConditions,
+        date: { gte: startOfDay, lte: endOfDay },
+        checkOutTime: null
+      },
+      orderBy: { checkInTime: 'desc' }
+    });
+
+    if (!activeSession) {
+      return res.status(404).json({ success: false, message: 'No active clock-in session found for today. You are currently clocked out.' });
+    }
+
+    const diffMs = now.getTime() - new Date(activeSession.checkInTime).getTime();
+    const sessionDurationMinutes = Math.floor(diffMs / 60000);
+
+    const updatedAttendance = await prisma.attendanceLog.update({
+      where: { id: activeSession.id },
+      data: {
+        checkOutTime: now,
+        durationMinutes: sessionDurationMinutes
+      }
+    });
+
+    await logActivity(activeSession.userName, `Clocked out after ${sessionDurationMinutes} minutes`, 'Attendance');
+    return res.json({ success: true, isClockedIn: false, durationMinutes: sessionDurationMinutes, data: updatedAttendance });
+  } catch (err) {
+    console.error('Clock-out error:', err);
     return res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -2402,6 +2499,76 @@ app.put('/api/purchases/:id', async (req, res) => {
 
     await logActivity('Purchase Admin', `Updated purchase record #${id}`, 'Purchase Module');
     return res.json({ success: true, data: updated });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Employee ID Card API
+app.get('/api/employee/:id/idcard', async (req, res) => {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.params.id }
+    });
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'Employee not found' });
+    }
+    
+    // Construct the ID card data
+    const idCardData = {
+      employeeId: user.employeeId || user.id.slice(0, 8),
+      name: user.name,
+      designation: user.designation || 'Staff Member',
+      department: user.department || 'General',
+      bloodGroup: user.bloodGroup || 'N/A',
+      emergencyContact: user.emergencyContact || 'N/A',
+      avatarUrl: user.avatarUrl || null,
+      company: 'VS DIGITECH',
+      address: '115/1 Purba Sinthee Bye Lane, Dumdum, Kolkata 700030'
+    };
+
+    return res.json({ success: true, data: idCardData });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Payroll Generation API
+app.post('/api/payroll/generate', async (req, res) => {
+  try {
+    const { userId, month, year } = req.body;
+    
+    const user = await prisma.user.findUnique({
+      where: { id: userId }
+    });
+    
+    if (!user) {
+      return res.status(400).json({ success: false, message: 'User not found' });
+    }
+    
+    // Basic calculation for demonstration
+    const baseSalary = user.basicSalary || 30000;
+    const pfDeduction = baseSalary * 0.12;
+    const taxDeduction = baseSalary * 0.05;
+    
+    const netSalary = baseSalary - (pfDeduction + taxDeduction);
+    
+    const newRecord = await prisma.salaryRecord.create({
+      data: {
+        userId: user.id,
+        userName: user.name,
+        month,
+        year: parseInt(year),
+        baseSalary,
+        pfDeduction,
+        taxDeduction,
+        netSalary,
+        status: 'PROCESSED'
+      }
+    });
+    
+    await logActivity('HR Admin', `Generated payroll for ${user.name} for ${month} ${year}`, 'Payroll');
+    return res.status(201).json({ success: true, data: newRecord });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }

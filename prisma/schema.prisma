@@ -63,6 +63,10 @@ model User {
   isMfaEnabled Boolean  @default(false)
   avatarUrl    String?
 
+  // ID Card Details
+  bloodGroup       String?
+  emergencyContact String?
+
   // Employee Personal & Company Details
   employeeId           String?   @unique
   basicSalary          Float?    @default(30000)
@@ -98,6 +102,7 @@ model User {
   meetingsAssigned ServiceMeeting[]    @relation("AssignedPersonnel")
   attendanceLogs   AttendanceLog[]
   leaveRequests    LeaveRequest[]
+  leaveBalances    LeaveBalance[]
   salaryRecords    SalaryRecord[]
   locations        PersonnelLocation[]
   siteAMCs         SiteAMC[]           @relation("EmployeeAMC")
@@ -175,8 +180,9 @@ model AttendanceLog {
   user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   userName     String
   date         DateTime  @default(now())
-  checkInTime  String?
-  checkOutTime String?
+  checkInTime  DateTime?
+  checkOutTime DateTime?
+  durationMinutes Int?
   status       String    @default("PRESENT") // PRESENT, ABSENT, LATE, LEAVE
   location     String?
   method       String    @default("WEB") // BIOMETRIC, MOBILE, WEB
@@ -194,6 +200,19 @@ model LeaveRequest {
   status      LeaveStatus @default(PENDING)
   approvedBy  String?
   createdAt   DateTime    @default(now())
+}
+
+model LeaveBalance {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  leaveType   String   // CASUAL, SICK, EARNED
+  allocated   Float    @default(0)
+  used        Float    @default(0)
+  pending     Float    @default(0)
+  carriedOver Float    @default(0)
+
+  @@unique([userId, leaveType])
 }
 
 model ShiftSchedule {
