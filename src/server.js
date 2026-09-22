@@ -936,7 +936,7 @@ app.get('/api/attendance', async (req, res) => {
       }
       if (!matchedUser && userName) {
         matchedUser = await prisma.user.findFirst({
-          where: { name: { equals: userName, mode: 'insensitive' } }
+          where: { name: { contains: userName, mode: 'insensitive' } }
         }).catch(() => null);
       }
 
@@ -945,7 +945,7 @@ app.get('/api/attendance', async (req, res) => {
 
       const OR = [];
       if (searchId) OR.push({ userId: searchId });
-      if (searchName) OR.push({ userName: { equals: searchName, mode: 'insensitive' } });
+      if (searchName) OR.push({ userName: { contains: searchName, mode: 'insensitive' } });
 
       if (OR.length > 0) {
         whereClause = { OR };
