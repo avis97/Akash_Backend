@@ -862,9 +862,31 @@ app.patch('/api/material-requests/:id/approve', async (req, res) => {
 // ----------------------------------------------------
 app.get('/api/attendance', async (req, res) => {
   try {
-    const { userId } = req.query;
-    const whereClause = {};
-    if (userId) whereClause.userId = userId;
+    const { userId, userName } = req.query;
+    let whereClause = {};
+
+    if (userId || userName) {
+      let matchedUser = null;
+      if (userId) {
+        matchedUser = await prisma.user.findUnique({ where: { id: userId } }).catch(() => null);
+      }
+      if (!matchedUser && userName) {
+        matchedUser = await prisma.user.findFirst({
+          where: { name: { equals: userName, mode: 'insensitive' } }
+        }).catch(() => null);
+      }
+
+      const searchName = matchedUser?.name || userName;
+      const searchId = matchedUser?.id || userId;
+
+      const OR = [];
+      if (searchId) OR.push({ userId: searchId });
+      if (searchName) OR.push({ userName: { equals: searchName, mode: 'insensitive' } });
+
+      if (OR.length > 0) {
+        whereClause = { OR };
+      }
+    }
 
     const attendance = await prisma.attendanceLog.findMany({
       where: whereClause,
@@ -882,11 +904,15 @@ app.post('/api/attendance/check-in', async (req, res) => {
 
     let user = null;
     if (userId) {
-      user = await prisma.user.findUnique({ where: { id: userId } });
+      user = await prisma.user.findUnique({ where: { id: userId } }).catch(() => null);
     }
-    if (!user) user = await prisma.user.findFirst();
+    if (!user && userName) {
+      user = await prisma.user.findFirst({
+        where: { name: { equals: userName, mode: 'insensitive' } }
+      }).catch(() => null);
+    }
 
-    const effectiveUserId = user ? user.id : (userId || 'usr-4');
+    const effectiveUserId = user ? user.id : (userId || userName || 'usr-staff');
     const effectiveUserName = (user && user.name && user.name !== 'Staff Member') 
       ? user.name 
       : ((userName && userName !== 'Staff Member') ? userName : (user?.name || 'Staff Member'));
@@ -895,10 +921,14 @@ app.post('/api/attendance/check-in', async (req, res) => {
     const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
     const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
 
-    // Single punch per day check
+    // Single punch per day check specifically for this user
+    const checkConditions = [];
+    if (effectiveUserId) checkConditions.push({ userId: effectiveUserId });
+    if (effectiveUserName) checkConditions.push({ userName: { equals: effectiveUserName, mode: 'insensitive' } });
+
     const existingPunch = await prisma.attendanceLog.findFirst({
       where: {
-        userId: effectiveUserId,
+        OR: checkConditions,
         date: {
           gte: startOfDay,
           lte: endOfDay
@@ -969,9 +999,31 @@ app.post('/api/attendance/check-in', async (req, res) => {
 
 app.get('/api/leaves', async (req, res) => {
   try {
-    const { userId } = req.query;
-    const whereClause = {};
-    if (userId) whereClause.userId = userId;
+    const { userId, userName } = req.query;
+    let whereClause = {};
+
+    if (userId || userName) {
+      let matchedUser = null;
+      if (userId) {
+        matchedUser = await prisma.user.findUnique({ where: { id: userId } }).catch(() => null);
+      }
+      if (!matchedUser && userName) {
+        matchedUser = await prisma.user.findFirst({
+          where: { name: { equals: userName, mode: 'insensitive' } }
+        }).catch(() => null);
+      }
+
+      const searchName = matchedUser?.name || userName;
+      const searchId = matchedUser?.id || userId;
+
+      const OR = [];
+      if (searchId) OR.push({ userId: searchId });
+      if (searchName) OR.push({ userName: { equals: searchName, mode: 'insensitive' } });
+
+      if (OR.length > 0) {
+        whereClause = { OR };
+      }
+    }
 
     const leaves = await prisma.leaveRequest.findMany({
       where: whereClause,
@@ -988,13 +1040,17 @@ app.post('/api/leaves', async (req, res) => {
     const { userId, userName, leaveType, startDate, endDate, reason } = req.body;
     let user = null;
     if (userId) {
-      user = await prisma.user.findUnique({ where: { id: userId } });
+      user = await prisma.user.findUnique({ where: { id: userId } }).catch(() => null);
     }
-    if (!user) user = await prisma.user.findFirst();
+    if (!user && userName) {
+      user = await prisma.user.findFirst({
+        where: { name: { equals: userName, mode: 'insensitive' } }
+      }).catch(() => null);
+    }
 
     const newLeave = await prisma.leaveRequest.create({
       data: {
-        userId: user ? user.id : (userId || 'usr-4'),
+        userId: user ? user.id : (userId || userName || 'usr-staff'),
         userName: userName || (user ? user.name : 'Staff Member'),
         leaveType: leaveType || 'CASUAL',
         startDate: new Date(startDate || Date.now()),
