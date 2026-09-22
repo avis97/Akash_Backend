@@ -10,7 +10,29 @@ const app = express();
 const PORT = process.env.PORT || 5005;
 const JWT_SECRET = process.env.JWT_SECRET || 'akashcrm_enterprise_secret_key_2026';
 
-app.use(cors());
+const allowedOrigins = [
+  'https://iveora.com',
+  'http://iveora.com',
+  'https://www.iveora.com',
+  'http://localhost:3000',
+  'http://localhost:5173',
+  'http://localhost:5005'
+];
+
+app.use(cors({
+  origin: function (origin, callback) {
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) !== -1 || origin.includes('iveora.com') || origin.includes('localhost')) {
+      return callback(null, true);
+    }
+    return callback(null, true);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-User-Role', 'X-Requested-With', 'Accept', 'Origin']
+}));
+
+app.options('*', cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
