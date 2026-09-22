@@ -863,23 +863,65 @@ app.patch('/api/material-requests/:id/approve', async (req, res) => {
 
 const getValidUser = async (userId, userName) => {
   let user = null;
+  let isExplicitUser = false;
+
   if (userId) {
     user = await prisma.user.findUnique({ where: { id: userId } }).catch(() => null);
+    if (user) isExplicitUser = true;
   }
   if (!user && userName) {
     user = await prisma.user.findFirst({
       where: { name: { equals: userName, mode: 'insensitive' } }
     }).catch(() => null);
+    if (user) isExplicitUser = true;
   }
-  if (!user && userName) {
+  if (!user && userName && userName.includes('@')) {
     user = await prisma.user.findFirst({
       where: { email: { equals: userName, mode: 'insensitive' } }
     }).catch(() => null);
+    if (user) isExplicitUser = true;
   }
+
+  // Auto-create user record if employee doesn't exist in DB yet
+  if (!user && (userName || userId)) {
+    try {
+      const cleanName = userName && userName !== 'Staff Member' ? userName : 'Staff Member';
+      const cleanEmail = (userName && userName.includes('@')) 
+        ? userName.toLowerCase() 
+        : `${cleanName.toLowerCase().replace(/[^a-z0-9]/g, '.')}@akashcrm.com`;
+
+      const existingEmailUser = await prisma.user.findUnique({ where: { email: cleanEmail } }).catch(() => null);
+      if (existingEmailUser) {
+        user = existingEmailUser;
+        isExplicitUser = true;
+      } else {
+        const hashedPassword = bcrypt.hashSync('password123', 10);
+        const newId = (userId && typeof userId === 'string' && !userId.startsWith('usr-') && userId.length > 3) 
+          ? userId 
+          : `usr-${Date.now()}`;
+
+        user = await prisma.user.create({
+          data: {
+            id: newId,
+            name: cleanName,
+            email: cleanEmail,
+            password: hashedPassword,
+            role: 'EMPLOYEE',
+            designation: 'Field Representative'
+          }
+        });
+        isExplicitUser = true;
+      }
+    } catch (e) {
+      console.warn('Auto user creation fallback notice:', e.message);
+    }
+  }
+
   if (!user) {
     user = await prisma.user.findFirst().catch(() => null);
   }
-  return user;
+
+  return { user, isExplicitUser };
 };
 
 app.get('/api/attendance', async (req, res) => {
@@ -924,7 +966,7 @@ app.post('/api/attendance/check-in', async (req, res) => {
   try {
     const { userId, userName, location, method, latitude, longitude } = req.body;
 
-    const user = await getValidUser(userId, userName);
+    const { user, isExplicitUser } = await getValidUser(userId, userName);
     if (!user) {
       return res.status(400).json({ success: false, message: 'No valid user account found in database.' });
     }
@@ -938,13 +980,17 @@ app.post('/api/attendance/check-in', async (req, res) => {
     const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
     const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
 
-    // Single punch per day check specifically for this user
+    // Single punch per day check: match by userName OR by exact userId if explicitly matched
+    const checkConditions = [
+      { userName: { equals: effectiveUserName, mode: 'insensitive' } }
+    ];
+    if (isExplicitUser) {
+      checkConditions.push({ userId: effectiveUserId });
+    }
+
     const existingPunch = await prisma.attendanceLog.findFirst({
       where: {
-        OR: [
-          { userName: { equals: effectiveUserName, mode: 'insensitive' } },
-          { userId: effectiveUserId }
-        ],
+        OR: checkConditions,
         date: {
           gte: startOfDay,
           lte: endOfDay
@@ -1054,7 +1100,7 @@ app.get('/api/leaves', async (req, res) => {
 app.post('/api/leaves', async (req, res) => {
   try {
     const { userId, userName, leaveType, startDate, endDate, reason } = req.body;
-    const user = await getValidUser(userId, userName);
+    const { user } = await getValidUser(userId, userName);
     if (!user) {
       return res.status(400).json({ success: false, message: 'No valid user account found in database.' });
     }
@@ -1157,7 +1203,7 @@ app.get('/api/payroll', async (req, res) => {
 app.post('/api/payroll/calculate', async (req, res) => {
   try {
     const { userId, userName, month, year, baseSalary, overtimeHours, allowances, deductions } = req.body;
-    const user = await getValidUser(userId, userName);
+    const { user } = await getValidUser(userId, userName);
     if (!user) {
       return res.status(400).json({ success: false, message: 'No valid user account found.' });
     }
