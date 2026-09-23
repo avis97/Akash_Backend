@@ -946,6 +946,58 @@ const getValidUser = async (userId, userName) => {
   return { user, isExplicitUser };
 };
 
+const backendAddressCache = new Map();
+
+async function reverseGeocodeBackend(lat, lng) {
+  if (!lat || !lng) return null;
+  const cacheKey = `${Number(lat).toFixed(4)},${Number(lng).toFixed(4)}`;
+  if (backendAddressCache.has(cacheKey)) {
+    return backendAddressCache.get(cacheKey);
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 4000);
+    const response = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`,
+      {
+        headers: { 'User-Agent': 'Akash_ER_App/1.0 (contact@vsdigitech.com)' },
+        signal: controller.signal
+      }
+    );
+    clearTimeout(timeoutId);
+
+    if (response.ok) {
+      const data = await response.json();
+      if (data && data.address) {
+        const a = data.address;
+        const mainLocation = a.building || a.amenity || a.road || a.neighbourhood || a.suburb;
+        const parts = [
+          mainLocation,
+          a.suburb !== mainLocation ? a.suburb : null,
+          a.city || a.town || a.village || a.county,
+          a.state,
+          a.postcode
+        ].filter(Boolean);
+        const cleanParts = parts.filter((item, index) => parts.indexOf(item) === index);
+        const formattedAddress = cleanParts.join(', ');
+
+        if (formattedAddress) {
+          backendAddressCache.set(cacheKey, formattedAddress);
+          return formattedAddress;
+        }
+      }
+      if (data && data.display_name) {
+        backendAddressCache.set(cacheKey, data.display_name);
+        return data.display_name;
+      }
+    }
+  } catch (err) {
+    console.warn('Backend reverse geocode notice:', err.message);
+  }
+  return null;
+}
+
 app.get('/api/attendance', async (req, res) => {
   try {
     const { userId, userName } = req.query;
@@ -1034,12 +1086,27 @@ app.post('/api/attendance/check-in', async (req, res) => {
     const status = isLate ? 'LATE' : 'PRESENT';
 
     let finalLocation = location;
-    if (!finalLocation || finalLocation === 'VS DIGITECH HO Dumdum') {
-      if (latitude && longitude) {
-        finalLocation = `GPS (${Number(latitude).toFixed(4)}, ${Number(longitude).toFixed(4)})`;
-      } else {
-        finalLocation = 'Office HO (Web Punch)';
+    let coordsToGeocode = null;
+    if (latitude && longitude) {
+      coordsToGeocode = { lat: Number(latitude), lng: Number(longitude) };
+    } else if (finalLocation && typeof finalLocation === 'string') {
+      const match = finalLocation.match(/(?:GPS\s*\(?)?\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\)?/i);
+      if (match) {
+        coordsToGeocode = { lat: parseFloat(match[1]), lng: parseFloat(match[2]) };
       }
+    }
+
+    if (coordsToGeocode) {
+      const resolvedAddress = await reverseGeocodeBackend(coordsToGeocode.lat, coordsToGeocode.lng);
+      if (resolvedAddress) {
+        finalLocation = resolvedAddress;
+      } else if (!finalLocation || finalLocation.startsWith('GPS (')) {
+        finalLocation = `GPS (${coordsToGeocode.lat.toFixed(4)}, ${coordsToGeocode.lng.toFixed(4)})`;
+      }
+    }
+
+    if (!finalLocation || finalLocation === 'VS DIGITECH HO Dumdum') {
+      finalLocation = 'Office HO (Web Punch)';
     }
 
     const newAtt = await prisma.attendanceLog.create({
