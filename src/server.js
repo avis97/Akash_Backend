@@ -1327,7 +1327,12 @@ app.get('/api/payroll', async (req, res) => {
 
 app.post('/api/payroll/calculate', async (req, res) => {
   try {
-    const { userId, userName, month, year, baseSalary, others1, others2, others3, others4, allowances, deductions, pTaxDeduction } = req.body;
+    const { 
+      userId, userName, month, year, baseSalary, basicSalary, 
+      others1, others2, others3, others4, allowances, deductions, 
+      pTaxDeduction, pTax, epfShare, esiShare, updateMasterSalary = true 
+    } = req.body;
+
     const { user } = await getValidUser(userId, userName);
     if (!user) {
       return res.status(400).json({ success: false, message: 'No valid user account found.' });
@@ -1350,7 +1355,7 @@ app.post('/api/payroll/calculate', async (req, res) => {
       lateDeduction = lateCount * 250;
     } catch (e) {}
 
-    const base = baseSalary !== undefined ? Number(baseSalary) : (Number(user?.basicSalary) || 0);
+    const base = baseSalary !== undefined ? Number(baseSalary) : (basicSalary !== undefined ? Number(basicSalary) : (Number(user?.basicSalary) || Number(user?.baseSalary) || 0));
     const o1 = others1 !== undefined ? Number(others1) : (Number(user?.others1) || 0);
     const o2 = others2 !== undefined ? Number(others2) : (Number(user?.others2) || 0);
     const o3 = others3 !== undefined ? Number(others3) : (Number(user?.others3) || 0);
@@ -1359,11 +1364,35 @@ app.post('/api/payroll/calculate', async (req, res) => {
     const totalAllow = allowances !== undefined ? Number(allowances) : (o1 + o2 + o3 + o4);
     const gross = base + totalAllow;
 
-    const epf = Math.round(base * 0.12);
-    const esi = Math.round(gross * 0.0075);
-    const pt = pTaxDeduction !== undefined ? Number(pTaxDeduction) : (user?.pTax || 110);
-    const totalDed = epf + esi + pt + lateDeduction + (Number(deductions) || 0);
+    const epf = epfShare !== undefined && epfShare !== null ? Number(epfShare) : Math.round(base * 0.12);
+    const esi = esiShare !== undefined && esiShare !== null ? Number(esiShare) : Math.round(gross * 0.0075);
+    const pt = pTax !== undefined && pTax !== null ? Number(pTax) : (pTaxDeduction !== undefined && pTaxDeduction !== null ? Number(pTaxDeduction) : (user?.pTax || 110));
+    const extraDed = Number(deductions) || 0;
+    const totalDed = epf + esi + pt + lateDeduction + extraDed;
     const net = gross - totalDed;
+
+    // Save/Update user's master salary structure if updateMasterSalary is enabled
+    if (updateMasterSalary && effectiveUserId) {
+      try {
+        await prisma.user.update({
+          where: { id: effectiveUserId },
+          data: {
+            basicSalary: base,
+            baseSalary: base,
+            salary: base,
+            others1: o1,
+            others2: o2,
+            others3: o3,
+            others4: o4,
+            epfShare: epf,
+            esiShare: esi,
+            pTax: pt
+          }
+        });
+      } catch (uErr) {
+        console.warn('Could not update user master salary record:', uErr);
+      }
+    }
 
     const newSal = await prisma.salaryRecord.create({
       data: {
@@ -1388,7 +1417,11 @@ app.post('/api/payroll/calculate', async (req, res) => {
     });
 
     await logActivity('Superadmin', `Generated salary slip for ${newSal.userName} (${month} ${year}) - Base ₹${base}, Net ₹${net}`, 'Salary Management');
-    return res.status(201).json({ success: true, data: newSal });
+    return res.status(201).json({ 
+      success: true, 
+      data: newSal, 
+      message: `Salary details updated & payslip generated for ${effectiveUserName}` 
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
