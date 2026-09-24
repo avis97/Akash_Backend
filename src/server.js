@@ -1108,16 +1108,17 @@ app.post('/api/attendance/check-in', async (req, res) => {
       }
     });
 
-    if (existingPunch) {
-      return res.status(400).json({
-        success: false,
-        message: `Attendance has already been punched today at ${existingPunch.checkInTime || 'earlier time'}. Multiple punches on the same day are not allowed.`
+    if (existingPunch && existingPunch.checkInTime) {
+      return res.status(200).json({
+        success: true,
+        data: existingPunch,
+        alreadyPunched: true,
+        message: `Attendance Check-In for today was already recorded at ${existingPunch.checkInTime}.`
       });
     }
 
     const currentHours = now.getHours();
     const currentMinutes = now.getMinutes();
-    // Late check: after 09:30 AM
     const isLate = currentHours > 9 || (currentHours === 9 && currentMinutes > 30);
     const status = isLate ? 'LATE' : 'PRESENT';
 
@@ -1142,20 +1143,34 @@ app.post('/api/attendance/check-in', async (req, res) => {
     }
 
     if (!finalLocation || finalLocation === 'VS DIGITECH HO Dumdum') {
-      finalLocation = 'Office HO (Web Punch)';
+      finalLocation = 'Office HO (Web Check-In)';
     }
 
-    const newAtt = await prisma.attendanceLog.create({
-      data: {
-        userId: effectiveUserId,
-        userName: effectiveUserName,
-        date: now,
-        checkInTime: now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        status,
-        location: finalLocation,
-        method: method || 'WEB'
-      }
-    });
+    const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    let newAtt;
+    if (existingPunch) {
+      newAtt = await prisma.attendanceLog.update({
+        where: { id: existingPunch.id },
+        data: {
+          checkInTime: timeStr,
+          status,
+          location: finalLocation
+        }
+      });
+    } else {
+      newAtt = await prisma.attendanceLog.create({
+        data: {
+          userId: effectiveUserId,
+          userName: effectiveUserName,
+          date: now,
+          checkInTime: timeStr,
+          status,
+          location: finalLocation,
+          method: method || 'WEB'
+        }
+      });
+    }
 
     if (latitude && longitude && effectiveUserId) {
       try {
@@ -1176,10 +1191,122 @@ app.post('/api/attendance/check-in', async (req, res) => {
       }
     }
 
-    await logActivity(newAtt.userName, `Checked in (${status}) via ${method} at ${finalLocation}`, 'Attendance');
-    return res.status(201).json({ success: true, data: newAtt });
+    await logActivity(newAtt.userName, `Checked in (${status}) at ${timeStr} via ${method} at ${finalLocation}`, 'Attendance');
+    return res.status(201).json({ success: true, data: newAtt, message: `Check-In Successful at ${timeStr} (${status})` });
   } catch (err) {
     console.error('Check-in error:', err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.post('/api/attendance/check-out', async (req, res) => {
+  try {
+    const { userId, userName, location, method, latitude, longitude } = req.body;
+
+    const { user, isExplicitUser } = await getValidUser(userId, userName);
+    if (!user) {
+      return res.status(400).json({ success: false, message: 'No valid user account found in database.' });
+    }
+
+    const effectiveUserId = user.id;
+    const effectiveUserName = (userName && userName !== 'Staff Member') 
+      ? userName 
+      : (user.name || 'Staff Member');
+
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+    const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+
+    const checkConditions = [
+      { userName: { equals: effectiveUserName, mode: 'insensitive' } }
+    ];
+    if (isExplicitUser) {
+      checkConditions.push({ userId: effectiveUserId });
+    }
+
+    const existingPunch = await prisma.attendanceLog.findFirst({
+      where: {
+        OR: checkConditions,
+        date: {
+          gte: startOfDay,
+          lte: endOfDay
+        }
+      }
+    });
+
+    const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    let finalLocation = location;
+    let coordsToGeocode = null;
+    if (latitude && longitude) {
+      coordsToGeocode = { lat: Number(latitude), lng: Number(longitude) };
+    } else if (finalLocation && typeof finalLocation === 'string') {
+      const match = finalLocation.match(/(?:GPS\s*\(?)?\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\)?/i);
+      if (match) {
+        coordsToGeocode = { lat: parseFloat(match[1]), lng: parseFloat(match[2]) };
+      }
+    }
+
+    if (coordsToGeocode) {
+      const resolvedAddress = await reverseGeocodeBackend(coordsToGeocode.lat, coordsToGeocode.lng);
+      if (resolvedAddress) {
+        finalLocation = resolvedAddress;
+      } else if (!finalLocation || finalLocation.startsWith('GPS (')) {
+        finalLocation = `GPS (${coordsToGeocode.lat.toFixed(4)}, ${coordsToGeocode.lng.toFixed(4)})`;
+      }
+    }
+
+    if (!finalLocation || finalLocation === 'VS DIGITECH HO Dumdum') {
+      finalLocation = 'Office HO (Web Check-Out)';
+    }
+
+    let updatedAtt;
+    if (existingPunch) {
+      const updatedLoc = existingPunch.location && !existingPunch.location.includes('Out:') 
+        ? `${existingPunch.location} | Out: ${finalLocation}`
+        : finalLocation;
+
+      updatedAtt = await prisma.attendanceLog.update({
+        where: { id: existingPunch.id },
+        data: {
+          checkOutTime: timeStr,
+          location: updatedLoc
+        }
+      });
+    } else {
+      updatedAtt = await prisma.attendanceLog.create({
+        data: {
+          userId: effectiveUserId,
+          userName: effectiveUserName,
+          date: now,
+          checkOutTime: timeStr,
+          status: 'PRESENT',
+          location: `Out: ${finalLocation}`,
+          method: method || 'WEB'
+        }
+      });
+    }
+
+    if (latitude && longitude && effectiveUserId) {
+      try {
+        await prisma.personnelLocation.create({
+          data: {
+            userId: effectiveUserId,
+            userName: effectiveUserName,
+            latitude: Number(latitude),
+            longitude: Number(longitude),
+            address: finalLocation,
+            batteryLevel: 100,
+            speed: 0,
+            updatedAt: now
+          }
+        });
+      } catch (locErr) {}
+    }
+
+    await logActivity(updatedAtt.userName, `Checked out at ${timeStr} via ${method} at ${finalLocation}`, 'Attendance');
+    return res.status(200).json({ success: true, data: updatedAtt, message: `Attendance Check-Out Successful at ${timeStr}` });
+  } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
 });
