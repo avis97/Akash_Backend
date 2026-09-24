@@ -497,25 +497,55 @@ app.put('/api/users/:id', authenticateToken, requireSuperAdmin, async (req, res)
   }
 });
 
-// Dedicated endpoint to update employee basic salary
+// Dedicated endpoint to update employee salary structure
 app.patch('/api/users/:id/basic-salary', async (req, res) => {
   try {
     const { id } = req.params;
-    const { basicSalary } = req.body;
+    const { basicSalary, others1, others2, others3, others4, pTax } = req.body;
 
     if (basicSalary === undefined || isNaN(Number(basicSalary))) {
       return res.status(400).json({ success: false, message: 'Valid basic salary number is required' });
     }
 
+    const basic = Number(basicSalary) || 0;
+    const o1 = Number(others1) || 0;
+    const o2 = Number(others2) || 0;
+    const o3 = Number(others3) || 0;
+    const o4 = Number(others4) || 0;
+
+    const totalAllowances = o1 + o2 + o3 + o4;
+    const grossSalary = basic + totalAllowances;
+
+    // EPF Employee Share = 12% of Basic Salary
+    const epfShare = Math.round(basic * 0.12);
+    // ESI Employee Share = 0.75% of Total Gross Salary
+    const esiShare = Math.round(grossSalary * 0.0075);
+    // P TAX = entered or default 110
+    const pt = pTax !== undefined && pTax !== null && !isNaN(Number(pTax)) ? Number(pTax) : 110;
+
+    const netTakeHome = grossSalary - epfShare - esiShare - pt;
+
     const updatedUser = await prisma.user.update({
       where: { id },
-      data: { basicSalary: Number(basicSalary) }
+      data: { 
+        basicSalary: basic,
+        others1: o1,
+        others2: o2,
+        others3: o3,
+        others4: o4,
+        totalAllowances,
+        grossSalary,
+        epfShare,
+        esiShare,
+        pTax: pt,
+        netTakeHome
+      }
     });
 
-    await logActivity('Superadmin', `Set basic salary for ${updatedUser.name} to ₹${basicSalary}`, 'Salary Management');
-    return res.json({ success: true, message: `Basic salary updated to ₹${basicSalary}`, data: updatedUser });
+    await logActivity('Superadmin', `Set full salary details for ${updatedUser.name} (Basic ₹${basic}, Net ₹${netTakeHome})`, 'Salary Management');
+    return res.json({ success: true, message: `Salary details updated for ${updatedUser.name}`, data: updatedUser });
   } catch (err) {
-    console.error('Update basic salary error:', err);
+    console.error('Update salary details error:', err);
     return res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -1291,7 +1321,7 @@ app.get('/api/payroll', async (req, res) => {
 
 app.post('/api/payroll/calculate', async (req, res) => {
   try {
-    const { userId, userName, month, year, baseSalary, overtimeHours, allowances, deductions } = req.body;
+    const { userId, userName, month, year, baseSalary, others1, others2, others3, others4, allowances, deductions, pTaxDeduction } = req.body;
     const { user } = await getValidUser(userId, userName);
     if (!user) {
       return res.status(400).json({ success: false, message: 'No valid user account found.' });
@@ -1300,7 +1330,6 @@ app.post('/api/payroll/calculate', async (req, res) => {
     const effectiveUserId = user.id;
     const effectiveUserName = userName || user.name || 'Staff Member';
 
-    // Query user attendance to calculate late deductions
     let lateDeduction = 0;
     try {
       const attLogs = await prisma.attendanceLog.findMany({
@@ -1312,18 +1341,23 @@ app.post('/api/payroll/calculate', async (req, res) => {
         }
       });
       const lateCount = attLogs.filter(a => a.status === 'LATE' || a.status === 'Late').length;
-      lateDeduction = lateCount * 250; // 250 per late entry
+      lateDeduction = lateCount * 250;
     } catch (e) {}
 
-    const base = Number(baseSalary) || Number(user?.basicSalary) || 30000;
-    const ot = (Number(overtimeHours) || 0) * 350;
-    const allow = Number(allowances) || 2500;
-    const manualDed = Number(deductions) || 0;
-    const totalDed = manualDed + lateDeduction;
+    const base = baseSalary !== undefined ? Number(baseSalary) : (Number(user?.basicSalary) || 0);
+    const o1 = others1 !== undefined ? Number(others1) : (Number(user?.others1) || 0);
+    const o2 = others2 !== undefined ? Number(others2) : (Number(user?.others2) || 0);
+    const o3 = others3 !== undefined ? Number(others3) : (Number(user?.others3) || 0);
+    const o4 = others4 !== undefined ? Number(others4) : (Number(user?.others4) || 0);
 
-    const pf = Math.round(base * 0.04);
-    const tax = Math.round(base * 0.03);
-    const net = base + ot + allow - totalDed - pf - tax;
+    const totalAllow = allowances !== undefined ? Number(allowances) : (o1 + o2 + o3 + o4);
+    const gross = base + totalAllow;
+
+    const epf = Math.round(base * 0.12);
+    const esi = Math.round(gross * 0.0075);
+    const pt = pTaxDeduction !== undefined ? Number(pTaxDeduction) : (user?.pTax || 110);
+    const totalDed = epf + esi + pt + lateDeduction + (Number(deductions) || 0);
+    const net = gross - totalDed;
 
     const newSal = await prisma.salaryRecord.create({
       data: {
@@ -1332,14 +1366,18 @@ app.post('/api/payroll/calculate', async (req, res) => {
         month: month || 'September',
         year: Number(year) || 2026,
         baseSalary: base,
-        overtimeHours: Number(overtimeHours) || 0,
-        overtimePay: ot,
-        allowances: allow,
+        others1: o1,
+        others2: o2,
+        others3: o3,
+        others4: o4,
+        allowances: totalAllow,
+        grossSalary: gross,
+        pfDeduction: epf,
+        esiDeduction: esi,
+        pTaxDeduction: pt,
         deductions: totalDed,
         netSalary: net,
-        status: 'PROCESSED',
-        pfDeduction: pf,
-        taxDeduction: tax
+        status: 'PROCESSED'
       }
     });
 
@@ -1394,6 +1432,18 @@ app.get('/api/attendance/monthly-report', async (req, res) => {
       const userLeaves = allLeaves.filter(l => (l.userId === user.id || (user.name && l.userName?.toLowerCase() === user.name.toLowerCase())) && l.status === 'APPROVED').length;
       const salRecord = allSalaries.find(s => s.userId === user.id || (user.name && s.userName?.toLowerCase() === user.name.toLowerCase()));
 
+      const base = user.basicSalary || salRecord?.baseSalary || 0;
+      const o1 = user.others1 || salRecord?.others1 || 0;
+      const o2 = user.others2 || salRecord?.others2 || 0;
+      const o3 = user.others3 || salRecord?.others3 || 0;
+      const o4 = user.others4 || salRecord?.others4 || 0;
+      const allow = user.totalAllowances || salRecord?.allowances || (o1 + o2 + o3 + o4);
+      const gross = user.grossSalary || salRecord?.grossSalary || (base + allow);
+      const epf = user.epfShare || salRecord?.pfDeduction || Math.round(base * 0.12);
+      const esi = user.esiShare || salRecord?.esiDeduction || Math.round(gross * 0.0075);
+      const pt = user.pTax || salRecord?.pTaxDeduction || 110;
+      const net = user.netTakeHome || salRecord?.netSalary || (gross - epf - esi - pt);
+
       return {
         userId: user.id,
         userName: user.name,
@@ -1407,8 +1457,17 @@ app.get('/api/attendance/monthly-report', async (req, res) => {
         absentDays: Math.max(0, 22 - totalLogged - userLeaves),
         approvedLeaves: userLeaves,
         salaryStatus: salRecord ? salRecord.status : 'PENDING',
-        baseSalary: user.basicSalary || salRecord?.baseSalary || 30000,
-        netSalary: salRecord ? salRecord.netSalary : null,
+        baseSalary: base,
+        others1: o1,
+        others2: o2,
+        others3: o3,
+        others4: o4,
+        allowances: allow,
+        grossSalary: gross,
+        epfShare: epf,
+        esiShare: esi,
+        pTax: pt,
+        netSalary: net,
         salaryId: salRecord ? salRecord.id : null
       };
     });
@@ -1449,13 +1508,20 @@ app.post('/api/payroll/generate-batch', async (req, res) => {
         where: { userId: user.id }
       });
       const lateCount = userAtt.filter(a => a.status === 'LATE').length;
-      const base = Number(user.basicSalary) || 30000;
+      const base = Number(user.basicSalary) || 0;
+      const o1 = Number(user.others1) || 0;
+      const o2 = Number(user.others2) || 0;
+      const o3 = Number(user.others3) || 0;
+      const o4 = Number(user.others4) || 0;
+      const allow = user.totalAllowances || (o1 + o2 + o3 + o4);
+      const gross = user.grossSalary || (base + allow);
+
       const lateDeduction = lateCount * 250;
-      const otPay = 0;
-      const allow = 2500;
-      const pf = Math.round(base * 0.04);
-      const tax = Math.round(base * 0.03);
-      const net = base + otPay + allow - lateDeduction - pf - tax;
+      const epf = user.epfShare || Math.round(base * 0.12);
+      const esi = user.esiShare || Math.round(gross * 0.0075);
+      const pt = user.pTax || 110;
+      const totalDed = epf + esi + pt + lateDeduction;
+      const net = gross - totalDed;
 
       // Check existing salary record
       const existing = await prisma.salaryRecord.findFirst({
@@ -1468,9 +1534,16 @@ app.post('/api/payroll/generate-batch', async (req, res) => {
           where: { id: existing.id },
           data: {
             baseSalary: base,
-            deductions: lateDeduction,
-            pfDeduction: pf,
-            taxDeduction: tax,
+            others1: o1,
+            others2: o2,
+            others3: o3,
+            others4: o4,
+            allowances: allow,
+            grossSalary: gross,
+            pfDeduction: epf,
+            esiDeduction: esi,
+            pTaxDeduction: pt,
+            deductions: totalDed,
             netSalary: net,
             status: 'PROCESSED'
           }
@@ -1483,12 +1556,18 @@ app.post('/api/payroll/generate-batch', async (req, res) => {
             month,
             year: Number(year),
             baseSalary: base,
+            others1: o1,
+            others2: o2,
+            others3: o3,
+            others4: o4,
+            allowances: allow,
+            grossSalary: gross,
             overtimeHours: 0,
             overtimePay: 0,
-            allowances: allow,
-            deductions: lateDeduction,
-            pfDeduction: pf,
-            taxDeduction: tax,
+            pfDeduction: epf,
+            esiDeduction: esi,
+            pTaxDeduction: pt,
+            deductions: totalDed,
             netSalary: net,
             status: 'PROCESSED'
           }

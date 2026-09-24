@@ -66,6 +66,16 @@ model User {
   // Employee Personal & Company Details
   employeeId           String?   @unique
   basicSalary          Float?    @default(30000)
+  others1              Float?    @default(0)
+  others2              Float?    @default(0)
+  others3              Float?    @default(0)
+  others4              Float?    @default(0)
+  totalAllowances      Float?    @default(0)
+  grossSalary          Float?    @default(0)
+  epfShare             Float?    @default(0)
+  esiShare             Float?    @default(0)
+  pTax                 Float?    @default(0)
+  netTakeHome          Float?    @default(0)
   dob                  String?
   gender               String?
   address              String?
@@ -214,15 +224,22 @@ model SalaryRecord {
   userName       String
   month          String
   year           Int
-  baseSalary     Float
+  baseSalary     Float    @default(0)
+  others1        Float    @default(0)
+  others2        Float    @default(0)
+  others3        Float    @default(0)
+  others4        Float    @default(0)
+  allowances     Float    @default(0)
+  grossSalary    Float    @default(0)
   overtimeHours  Float    @default(0)
   overtimePay    Float    @default(0)
-  allowances     Float    @default(0)
-  deductions     Float    @default(0)
-  netSalary      Float
-  status         String   @default("PROCESSED") // DRAFT, PROCESSED, PAID
   pfDeduction    Float    @default(0)
+  esiDeduction   Float    @default(0)
+  pTaxDeduction  Float    @default(0)
   taxDeduction   Float    @default(0)
+  deductions     Float    @default(0)
+  netSalary      Float    @default(0)
+  status         String   @default("PROCESSED") // DRAFT, PROCESSED, PAID
   generatedAt    DateTime @default(now())
 }
 
