@@ -501,7 +501,7 @@ app.put('/api/users/:id', authenticateToken, requireSuperAdmin, async (req, res)
 app.patch('/api/users/:id/basic-salary', async (req, res) => {
   try {
     const { id } = req.params;
-    const { basicSalary, others1, others2, others3, others4, pTax } = req.body;
+    const { basicSalary, others1, others2, others3, others4, epfShare, esiShare, pTax } = req.body;
 
     if (basicSalary === undefined || isNaN(Number(basicSalary))) {
       return res.status(400).json({ success: false, message: 'Valid basic salary number is required' });
@@ -516,14 +516,20 @@ app.patch('/api/users/:id/basic-salary', async (req, res) => {
     const totalAllowances = o1 + o2 + o3 + o4;
     const grossSalary = basic + totalAllowances;
 
-    // EPF Employee Share = 12% of Basic Salary
-    const epfShare = Math.round(basic * 0.12);
-    // ESI Employee Share = 0.75% of Total Gross Salary
-    const esiShare = Math.round(grossSalary * 0.0075);
+    // EPF Employee Share = custom or 12% of Basic Salary
+    const epf = epfShare !== undefined && epfShare !== null && !isNaN(Number(epfShare)) 
+      ? Number(epfShare) 
+      : Math.round(basic * 0.12);
+
+    // ESI Employee Share = custom or 0.75% of Total Gross Salary
+    const esi = esiShare !== undefined && esiShare !== null && !isNaN(Number(esiShare)) 
+      ? Number(esiShare) 
+      : Math.round(grossSalary * 0.0075);
+
     // P TAX = entered or default 110
     const pt = pTax !== undefined && pTax !== null && !isNaN(Number(pTax)) ? Number(pTax) : 110;
 
-    const netTakeHome = grossSalary - epfShare - esiShare - pt;
+    const netTakeHome = grossSalary - epf - esi - pt;
 
     const updatedUser = await prisma.user.update({
       where: { id },
@@ -535,8 +541,8 @@ app.patch('/api/users/:id/basic-salary', async (req, res) => {
         others4: o4,
         totalAllowances,
         grossSalary,
-        epfShare,
-        esiShare,
+        epfShare: epf,
+        esiShare: esi,
         pTax: pt,
         netTakeHome
       }
