@@ -1087,8 +1087,10 @@ app.post('/api/attendance/check-in', async (req, res) => {
       : (user.name || 'Staff Member');
 
     const now = new Date();
-    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
-    const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+    // Indian Standard Time (IST - Asia/Kolkata) bounds & calculations
+    const istDateStr = now.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const startOfDay = new Date(`${istDateStr}T00:00:00.000+05:30`);
+    const endOfDay = new Date(`${istDateStr}T23:59:59.999+05:30`);
 
     // Single punch per day check: match by userName OR by exact userId if explicitly matched
     const checkConditions = [
@@ -1117,9 +1119,10 @@ app.post('/api/attendance/check-in', async (req, res) => {
       });
     }
 
-    const currentHours = now.getHours();
-    const currentMinutes = now.getMinutes();
-    const isLate = currentHours > 9 || (currentHours === 9 && currentMinutes > 30);
+    // Evaluate isLate in IST timezone (Late after 09:30 AM IST)
+    const istHours = parseInt(now.toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour: '2-digit', hour12: false }), 10);
+    const istMinutes = parseInt(now.toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', minute: '2-digit' }), 10);
+    const isLate = istHours > 9 || (istHours === 9 && istMinutes > 30);
     const status = isLate ? 'LATE' : 'PRESENT';
 
     let finalLocation = location;
@@ -1146,7 +1149,8 @@ app.post('/api/attendance/check-in', async (req, res) => {
       finalLocation = 'Office HO (Web Check-In)';
     }
 
-    const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    // Format check-in time specifically in Indian Standard Time (IST)
+    const timeStr = now.toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true });
 
     let newAtt;
     if (existingPunch) {
@@ -1214,8 +1218,10 @@ app.post('/api/attendance/check-out', async (req, res) => {
       : (user.name || 'Staff Member');
 
     const now = new Date();
-    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
-    const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+    // Indian Standard Time (IST - Asia/Kolkata) bounds & calculations
+    const istDateStr = now.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const startOfDay = new Date(`${istDateStr}T00:00:00.000+05:30`);
+    const endOfDay = new Date(`${istDateStr}T23:59:59.999+05:30`);
 
     const checkConditions = [
       { userName: { equals: effectiveUserName, mode: 'insensitive' } }
@@ -1234,7 +1240,8 @@ app.post('/api/attendance/check-out', async (req, res) => {
       }
     });
 
-    const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    // Format check-out time specifically in Indian Standard Time (IST)
+    const timeStr = now.toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true });
 
     let finalLocation = location;
     let coordsToGeocode = null;
