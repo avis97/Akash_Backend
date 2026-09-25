@@ -1119,10 +1119,10 @@ app.post('/api/attendance/check-in', async (req, res) => {
       });
     }
 
-    // Evaluate isLate in IST timezone (Late after 09:30 AM IST)
+    // Evaluate isLate in IST timezone (Late after 10:00 AM IST)
     const istHours = parseInt(now.toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour: '2-digit', hour12: false }), 10);
     const istMinutes = parseInt(now.toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', minute: '2-digit' }), 10);
-    const isLate = istHours > 9 || (istHours === 9 && istMinutes > 30);
+    const isLate = istHours > 10 || (istHours === 10 && istMinutes > 0);
     const status = isLate ? 'LATE' : 'PRESENT';
 
     let finalLocation = location;
@@ -1318,6 +1318,46 @@ app.post('/api/attendance/check-out', async (req, res) => {
   }
 });
 
+// Manual correction / input of attendance (Admin / HR)
+app.put('/api/attendance/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { checkInTime, checkOutTime, status, location, method, date } = req.body;
+    const existing = await prisma.attendanceLog.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ success: false, message: 'Attendance record not found' });
+
+    const updated = await prisma.attendanceLog.update({
+      where: { id },
+      data: {
+        ...(checkInTime !== undefined && { checkInTime }),
+        ...(checkOutTime !== undefined && { checkOutTime }),
+        ...(status !== undefined && { status }),
+        ...(location !== undefined && { location }),
+        ...(method !== undefined && { method }),
+        ...(date !== undefined && { date: new Date(date) })
+      }
+    });
+
+    await logActivity('Admin/HR', `Manually updated attendance for ${updated.userName} on ${updated.date.toISOString().slice(0,10)} (${updated.status})`, 'Attendance');
+    return res.json({ success: true, data: updated, message: 'Attendance record updated successfully' });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.delete('/api/attendance/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const existing = await prisma.attendanceLog.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ success: false, message: 'Attendance record not found' });
+    await prisma.attendanceLog.delete({ where: { id } });
+    await logActivity('Admin/HR', `Deleted attendance record for ${existing.userName}`, 'Attendance');
+    return res.json({ success: true, message: 'Attendance record deleted' });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 app.get('/api/leaves', async (req, res) => {
   try {
     const { userId, userName } = req.query;
@@ -1386,6 +1426,40 @@ app.post('/api/leaves', async (req, res) => {
   }
 });
 
+app.put('/api/leaves/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { leaveType, startDate, endDate, reason, status } = req.body;
+    const existing = await prisma.leaveRequest.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ success: false, message: 'Leave request not found' });
+
+    const updated = await prisma.leaveRequest.update({
+      where: { id },
+      data: {
+        ...(leaveType !== undefined && { leaveType }),
+        ...(startDate !== undefined && { startDate: new Date(startDate) }),
+        ...(endDate !== undefined && { endDate: new Date(endDate) }),
+        ...(reason !== undefined && { reason }),
+        ...(status !== undefined && { status })
+      }
+    });
+
+    return res.json({ success: true, data: updated, message: 'Leave request updated' });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.delete('/api/leaves/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await prisma.leaveRequest.delete({ where: { id } });
+    return res.json({ success: true, message: 'Leave request deleted' });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 app.patch('/api/leaves/:id/approve', async (req, res) => {
   try {
     const { id } = req.params;
@@ -1409,10 +1483,49 @@ app.patch('/api/leaves/:id/approve', async (req, res) => {
   }
 });
 
+// Shift Management & Notifications
 app.get('/api/shifts', async (req, res) => {
   try {
-    const shifts = await prisma.shiftSchedule.findMany();
+    const shifts = await prisma.shiftSchedule.findMany({
+      orderBy: { date: 'desc' }
+    });
     return res.json({ success: true, data: shifts });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.post('/api/shifts', async (req, res) => {
+  try {
+    const { userId, userName, shiftName, startTime, endTime, date, notes } = req.body;
+    const { user } = await getValidUser(userId, userName);
+    const effectiveUserId = user ? user.id : (userId || 'usr-1');
+    const effectiveUserName = user ? user.name : (userName || 'Staff Member');
+
+    const shift = await prisma.shiftSchedule.create({
+      data: {
+        userId: effectiveUserId,
+        userName: effectiveUserName,
+        shiftName: shiftName || 'REGULAR',
+        startTime: startTime || '09:30 AM',
+        endTime: endTime || '06:30 PM',
+        date: date ? new Date(date) : new Date(),
+        notes: notes || null
+      }
+    });
+
+    await logActivity('Admin/HR', `Assigned shift "${shift.shiftName}" (${shift.startTime} - ${shift.endTime}) to ${shift.userName}`, 'Shift Scheduling');
+    return res.status(201).json({ success: true, data: shift, message: `Shift assigned to ${shift.userName} with notification sent.` });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.delete('/api/shifts/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await prisma.shiftSchedule.delete({ where: { id } });
+    return res.json({ success: true, message: 'Shift deleted successfully' });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -1459,12 +1572,43 @@ app.get('/api/payroll', async (req, res) => {
   }
 });
 
+// Helper utilities for Attendance, Overtime & Deductions
+function calculateRoundedOtHourlyRate(totalMonthlyComp) {
+  if (!totalMonthlyComp || totalMonthlyComp <= 0) return 0;
+  const rawHourlyRate = totalMonthlyComp / (30 * 8);
+  return Math.round(rawHourlyRate / 5) * 5;
+}
+
+function calculateHourlyOtFromLogs(attendanceLogs) {
+  let otHours = 0;
+  for (const log of attendanceLogs) {
+    if (log.checkIn) {
+      const inDate = new Date(log.checkIn);
+      const istHours = inDate.getUTCHours() + 5.5;
+      const normalizedIn = (istHours + 24) % 24;
+      if (normalizedIn < 9) {
+        otHours += Math.max(1, Math.floor(9 - normalizedIn));
+      }
+    }
+    if (log.checkOut) {
+      const outDate = new Date(log.checkOut);
+      const istHours = outDate.getUTCHours() + 5.5;
+      const normalizedOut = (istHours + 24) % 24;
+      if (normalizedOut > 20) {
+        otHours += Math.max(1, Math.floor(normalizedOut - 19));
+      }
+    }
+  }
+  return otHours;
+}
+
 app.post('/api/payroll/calculate', async (req, res) => {
   try {
     const { 
       userId, userName, month, year, baseSalary, basicSalary, 
       others1, others2, others3, others4, allowances, deductions, 
-      pTaxDeduction, pTax, epfShare, esiShare, updateMasterSalary = true 
+      pTaxDeduction, pTax, epfShare, esiShare, additionalDutyDays = 0,
+      allottedPaidLeaves = 2, updateMasterSalary = true 
     } = req.body;
 
     const { user } = await getValidUser(userId, userName);
@@ -1475,7 +1619,21 @@ app.post('/api/payroll/calculate', async (req, res) => {
     const effectiveUserId = user.id;
     const effectiveUserName = userName || user.name || 'Staff Member';
 
-    let lateDeduction = 0;
+    const base = baseSalary !== undefined ? Number(baseSalary) : (basicSalary !== undefined ? Number(basicSalary) : (Number(user?.basicSalary) || Number(user?.baseSalary) || 0));
+    const o1 = others1 !== undefined ? Number(others1) : (Number(user?.others1) || 0);
+    const o2 = others2 !== undefined ? Number(others2) : (Number(user?.others2) || 0);
+    const o3 = others3 !== undefined ? Number(others3) : (Number(user?.others3) || 0);
+    const o4 = others4 !== undefined ? Number(others4) : (Number(user?.others4) || 0);
+
+    const totalMonthlyComp = base + o1 + o2 + o3 + o4;
+    const totalAllow = allowances !== undefined ? Number(allowances) : (o1 + o2 + o3 + o4);
+    const gross = base + totalAllow;
+    const dailyRate = totalMonthlyComp > 0 ? (totalMonthlyComp / 30) : 0;
+
+    // Fetch Attendance Logs & Leaves for calculation
+    let lateCount = 0;
+    let otHours = 0;
+    let addDutyDays = Number(additionalDutyDays) || 0;
     try {
       const attLogs = await prisma.attendanceLog.findMany({
         where: {
@@ -1485,25 +1643,55 @@ app.post('/api/payroll/calculate', async (req, res) => {
           ]
         }
       });
-      const lateCount = attLogs.filter(a => a.status === 'LATE' || a.status === 'Late').length;
-      lateDeduction = lateCount * 250;
+      lateCount = attLogs.filter(a => a.status === 'LATE' || a.status === 'Late').length;
+      otHours = calculateHourlyOtFromLogs(attLogs);
+      const flagAddDuty = attLogs.filter(a => a.isAdditionalDuty).length;
+      if (flagAddDuty > addDutyDays) addDutyDays = flagAddDuty;
     } catch (e) {}
 
-    const base = baseSalary !== undefined ? Number(baseSalary) : (basicSalary !== undefined ? Number(basicSalary) : (Number(user?.basicSalary) || Number(user?.baseSalary) || 0));
-    const o1 = others1 !== undefined ? Number(others1) : (Number(user?.others1) || 0);
-    const o2 = others2 !== undefined ? Number(others2) : (Number(user?.others2) || 0);
-    const o3 = others3 !== undefined ? Number(others3) : (Number(user?.others3) || 0);
-    const o4 = others4 !== undefined ? Number(others4) : (Number(user?.others4) || 0);
+    // 1 Absent Day per 3 Late Entries rule
+    const lateAbsentDays = Math.floor(lateCount / 3);
+    const lateDeduction = Math.round(lateAbsentDays * dailyRate);
 
-    const totalAllow = allowances !== undefined ? Number(allowances) : (o1 + o2 + o3 + o4);
-    const gross = base + totalAllow;
+    // Leave handling (Paid leave encashment vs unpaid leave deduction)
+    let approvedLeaves = 0;
+    try {
+      const leaves = await prisma.leaveRequest.findMany({
+        where: {
+          OR: [
+            { userId: effectiveUserId },
+            { userName: { equals: effectiveUserName, mode: 'insensitive' } }
+          ],
+          status: 'APPROVED'
+        }
+      });
+      approvedLeaves = leaves.length;
+    } catch (e) {}
 
+    let leaveEncashmentPay = 0;
+    let unpaidLeaveDeduction = 0;
+    const allotted = Number(allottedPaidLeaves) || Number(user?.allottedLeaves) || 2;
+    if (approvedLeaves <= allotted) {
+      const unusedLeaves = allotted - approvedLeaves;
+      leaveEncashmentPay = Math.round(unusedLeaves * dailyRate);
+    } else {
+      const excessLeaves = approvedLeaves - allotted;
+      unpaidLeaveDeduction = Math.round(excessLeaves * dailyRate);
+    }
+
+    // Overtime Calculations
+    const roundedOtRate = calculateRoundedOtHourlyRate(totalMonthlyComp);
+    const hourlyOtPay = Math.round(otHours * roundedOtRate);
+    const additionalDutyOtPay = Math.round(addDutyDays * dailyRate);
+    const totalOtPay = hourlyOtPay + additionalDutyOtPay;
+
+    // Statutory Deductions
     const epf = epfShare !== undefined && epfShare !== null ? Number(epfShare) : Math.round(base * 0.12);
     const esi = esiShare !== undefined && esiShare !== null ? Number(esiShare) : Math.round(gross * 0.0075);
     const pt = pTax !== undefined && pTax !== null ? Number(pTax) : (pTaxDeduction !== undefined && pTaxDeduction !== null ? Number(pTaxDeduction) : (user?.pTax || 110));
     const extraDed = Number(deductions) || 0;
-    const totalDed = epf + esi + pt + lateDeduction + extraDed;
-    const net = gross - totalDed;
+    const totalDed = epf + esi + pt + lateDeduction + unpaidLeaveDeduction + extraDed;
+    const net = gross + totalOtPay + leaveEncashmentPay - totalDed;
 
     // Save/Update user's master salary structure if updateMasterSalary is enabled
     if (updateMasterSalary && effectiveUserId) {
@@ -1539,8 +1727,10 @@ app.post('/api/payroll/calculate', async (req, res) => {
         others2: o2,
         others3: o3,
         others4: o4,
-        allowances: totalAllow,
-        grossSalary: gross,
+        allowances: totalAllow + totalOtPay + leaveEncashmentPay,
+        grossSalary: gross + totalOtPay + leaveEncashmentPay,
+        overtimeHours: otHours,
+        overtimePay: totalOtPay,
         pfDeduction: epf,
         esiDeduction: esi,
         pTaxDeduction: pt,
@@ -1550,7 +1740,7 @@ app.post('/api/payroll/calculate', async (req, res) => {
       }
     });
 
-    await logActivity('Superadmin', `Generated salary slip for ${newSal.userName} (${month} ${year}) - Base ₹${base}, Net ₹${net}`, 'Salary Management');
+    await logActivity('Superadmin', `Generated salary slip for ${newSal.userName} (${month} ${year}) - Base ₹${base}, OT ₹${totalOtPay}, Net ₹${net}`, 'Salary Management');
     return res.status(201).json({ 
       success: true, 
       data: newSal, 
@@ -1602,6 +1792,7 @@ app.get('/api/attendance/monthly-report', async (req, res) => {
       const presentCount = userAtt.filter(a => a.status === 'PRESENT').length;
       const lateCount = userAtt.filter(a => a.status === 'LATE').length;
       const totalLogged = presentCount + lateCount;
+      const otHours = calculateHourlyOtFromLogs(userAtt);
       const userLeaves = allLeaves.filter(l => (l.userId === user.id || (user.name && l.userName?.toLowerCase() === user.name.toLowerCase())) && l.status === 'APPROVED').length;
       const salRecord = allSalaries.find(s => s.userId === user.id || (user.name && s.userName?.toLowerCase() === user.name.toLowerCase()));
 
@@ -1610,12 +1801,16 @@ app.get('/api/attendance/monthly-report', async (req, res) => {
       const o2 = user.others2 || salRecord?.others2 || 0;
       const o3 = user.others3 || salRecord?.others3 || 0;
       const o4 = user.others4 || salRecord?.others4 || 0;
+      const totalMonthlyComp = base + o1 + o2 + o3 + o4;
       const allow = user.totalAllowances || salRecord?.allowances || (o1 + o2 + o3 + o4);
       const gross = user.grossSalary || salRecord?.grossSalary || (base + allow);
       const epf = user.epfShare || salRecord?.pfDeduction || Math.round(base * 0.12);
       const esi = user.esiShare || salRecord?.esiDeduction || Math.round(gross * 0.0075);
       const pt = user.pTax || salRecord?.pTaxDeduction || 110;
-      const net = user.netTakeHome || salRecord?.netSalary || (gross - epf - esi - pt);
+      const roundedOtRate = calculateRoundedOtHourlyRate(totalMonthlyComp);
+      const otPay = Math.round(otHours * roundedOtRate);
+
+      const net = user.netTakeHome || salRecord?.netSalary || (gross + otPay - epf - esi - pt);
 
       return {
         userId: user.id,
@@ -1627,8 +1822,12 @@ app.get('/api/attendance/monthly-report', async (req, res) => {
         totalWorkingDays: 22,
         presentDays: totalLogged,
         lateEntries: lateCount,
+        lateAbsentDeductionDays: Math.floor(lateCount / 3),
         absentDays: Math.max(0, 22 - totalLogged - userLeaves),
         approvedLeaves: userLeaves,
+        overtimeHours: otHours,
+        roundedOtRate,
+        overtimePay: otPay,
         salaryStatus: salRecord ? salRecord.status : 'PENDING',
         baseSalary: base,
         others1: o1,
@@ -1653,6 +1852,7 @@ app.get('/api/attendance/monthly-report', async (req, res) => {
         totalEmployees: users.length,
         totalPresentDays: report.reduce((sum, r) => sum + r.presentDays, 0),
         totalLateEntries: report.reduce((sum, r) => sum + r.lateEntries, 0),
+        totalOvertimeHours: report.reduce((sum, r) => sum + r.overtimeHours, 0),
         totalSalariesProcessed: report.filter(r => r.salaryStatus === 'PROCESSED').length
       },
       data: report
@@ -1680,21 +1880,31 @@ app.post('/api/payroll/generate-batch', async (req, res) => {
       const userAtt = await prisma.attendanceLog.findMany({
         where: { userId: user.id }
       });
-      const lateCount = userAtt.filter(a => a.status === 'LATE').length;
+      const lateCount = userAtt.filter(a => a.status === 'LATE' || a.status === 'Late').length;
       const base = Number(user.basicSalary) || 0;
       const o1 = Number(user.others1) || 0;
       const o2 = Number(user.others2) || 0;
       const o3 = Number(user.others3) || 0;
       const o4 = Number(user.others4) || 0;
+      const totalMonthlyComp = base + o1 + o2 + o3 + o4;
+      const dailyRate = totalMonthlyComp > 0 ? (totalMonthlyComp / 30) : 0;
       const allow = user.totalAllowances || (o1 + o2 + o3 + o4);
       const gross = user.grossSalary || (base + allow);
 
-      const lateDeduction = lateCount * 250;
+      // Late deduction: 1 absent per 3 late entries
+      const lateAbsentDays = Math.floor(lateCount / 3);
+      const lateDeduction = Math.round(lateAbsentDays * dailyRate);
+
+      // OT Calculation
+      const otHours = calculateHourlyOtFromLogs(userAtt);
+      const roundedOtRate = calculateRoundedOtHourlyRate(totalMonthlyComp);
+      const totalOtPay = Math.round(otHours * roundedOtRate);
+
       const epf = user.epfShare || Math.round(base * 0.12);
       const esi = user.esiShare || Math.round(gross * 0.0075);
       const pt = user.pTax || 110;
       const totalDed = epf + esi + pt + lateDeduction;
-      const net = gross - totalDed;
+      const net = gross + totalOtPay - totalDed;
 
       // Check existing salary record
       const existing = await prisma.salaryRecord.findFirst({
@@ -1711,8 +1921,10 @@ app.post('/api/payroll/generate-batch', async (req, res) => {
             others2: o2,
             others3: o3,
             others4: o4,
-            allowances: allow,
-            grossSalary: gross,
+            allowances: allow + totalOtPay,
+            grossSalary: gross + totalOtPay,
+            overtimeHours: otHours,
+            overtimePay: totalOtPay,
             pfDeduction: epf,
             esiDeduction: esi,
             pTaxDeduction: pt,
@@ -1733,10 +1945,10 @@ app.post('/api/payroll/generate-batch', async (req, res) => {
             others2: o2,
             others3: o3,
             others4: o4,
-            allowances: allow,
-            grossSalary: gross,
-            overtimeHours: 0,
-            overtimePay: 0,
+            allowances: allow + totalOtPay,
+            grossSalary: gross + totalOtPay,
+            overtimeHours: otHours,
+            overtimePay: totalOtPay,
             pfDeduction: epf,
             esiDeduction: esi,
             pTaxDeduction: pt,
