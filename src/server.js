@@ -2113,27 +2113,95 @@ app.get('/api/inventory', async (req, res) => {
 
 app.post('/api/inventory', async (req, res) => {
   try {
-    const { name, category, brand, stockQuantity, unit, unitPrice, minStockAlert } = req.body;
-    const code = `VS-${category.substring(0, 3).toUpperCase()}-${Math.floor(100 + Math.random() * 900)}`;
+    const { 
+      name, code, sku, salePrice, purchasePrice, tax, brand, category, unit, productImage, type, stockQuantity, description, minStockAlert, unitPrice 
+    } = req.body;
+
+    const finalCode = (sku || code || '').trim() || `AE-${Math.floor(1000 + Math.random() * 9000)}`;
+    const finalSalePrice = Number(salePrice !== undefined && salePrice !== '' ? salePrice : (unitPrice || 0));
+    const finalPurchasePrice = Number(purchasePrice !== undefined && purchasePrice !== '' ? purchasePrice : 0);
+    const finalQty = Number(stockQuantity !== undefined && stockQuantity !== '' ? stockQuantity : 0);
 
     const newProd = await prisma.product.create({
       data: {
-        code,
-        name,
-        category,
-        brand: brand || 'VS DIGITECH',
-        stockQuantity: Number(stockQuantity),
-        unit: unit || 'Pcs',
+        code: finalCode,
+        name: name || 'New Product Item',
+        salePrice: finalSalePrice,
+        purchasePrice: finalPurchasePrice,
+        unitPrice: finalSalePrice,
+        tax: tax || null,
+        brand: brand || 'General',
+        category: category || 'General Equipment',
+        unit: unit || 'Pics',
+        productImage: productImage || null,
+        type: type || 'Product',
+        stockQuantity: finalQty,
+        description: description || null,
         minStockAlert: Number(minStockAlert) || 5,
-        unitPrice: Number(unitPrice),
-        qrCodeUrl: `QR-${code}`
+        qrCodeUrl: `QR-${finalCode}`
       }
     });
 
-    await logActivity('Inventory Admin', `Added new product item to database: ${name} (${stockQuantity} ${unit})`, 'Inventory Management');
+    await logActivity('Inventory Admin', `Created new product (${newProd.code}): ${newProd.name} (${finalQty} ${newProd.unit})`, 'Inventory Management');
     return res.status(201).json({ success: true, data: newProd });
   } catch (err) {
     console.error('Inventory create error:', err);
+    return res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
+  }
+});
+
+app.put('/api/inventory/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { 
+      name, code, sku, salePrice, purchasePrice, tax, brand, category, unit, productImage, type, stockQuantity, description, minStockAlert, unitPrice 
+    } = req.body;
+
+    const existing = await prisma.product.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ success: false, message: 'Product not found' });
+
+    const finalSalePrice = salePrice !== undefined && salePrice !== '' ? Number(salePrice) : (unitPrice !== undefined && unitPrice !== '' ? Number(unitPrice) : existing.salePrice);
+    const finalPurchasePrice = purchasePrice !== undefined && purchasePrice !== '' ? Number(purchasePrice) : existing.purchasePrice;
+    const finalQty = stockQuantity !== undefined && stockQuantity !== '' ? Number(stockQuantity) : existing.stockQuantity;
+
+    const updated = await prisma.product.update({
+      where: { id },
+      data: {
+        ...(name && { name }),
+        ...((sku || code) && { code: (sku || code).trim() }),
+        ...(salePrice !== undefined || unitPrice !== undefined ? { salePrice: finalSalePrice, unitPrice: finalSalePrice } : {}),
+        ...(purchasePrice !== undefined && { purchasePrice: finalPurchasePrice }),
+        ...(tax !== undefined && { tax }),
+        ...(brand && { brand }),
+        ...(category && { category }),
+        ...(unit && { unit }),
+        ...(productImage !== undefined && { productImage }),
+        ...(type && { type }),
+        ...(stockQuantity !== undefined && { stockQuantity: finalQty }),
+        ...(description !== undefined && { description }),
+        ...(minStockAlert !== undefined && { minStockAlert: Number(minStockAlert) })
+      }
+    });
+
+    await logActivity('Inventory Admin', `Updated product details for ${updated.name} (${updated.code})`, 'Inventory Management');
+    return res.json({ success: true, data: updated });
+  } catch (err) {
+    console.error('Inventory update error:', err);
+    return res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
+  }
+});
+
+app.delete('/api/inventory/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const existing = await prisma.product.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ success: false, message: 'Product not found' });
+
+    await prisma.product.delete({ where: { id } });
+    await logActivity('Inventory Admin', `Deleted product ${existing.name} (${existing.code})`, 'Inventory Management');
+    return res.json({ success: true, message: 'Product deleted successfully' });
+  } catch (err) {
+    console.error('Inventory delete error:', err);
     return res.status(500).json({ success: false, message: err.message });
   }
 });
