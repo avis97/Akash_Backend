@@ -3401,9 +3401,14 @@ app.get('/api/payroll/previous-month-data', async (req, res) => {
         }
       });
 
+      let presentCount = 0;
+      let explicitAbsentCount = 0;
+
       for (const log of logs) {
         if (log.status === 'ABSENT' || log.status === 'Absent') {
-          autoAbsentDays += 1;
+          explicitAbsentCount += 1;
+        } else if (log.status === 'PRESENT' || log.status === 'LATE' || log.status === 'ON_DUTY' || log.checkInTime) {
+          presentCount += 1;
         }
 
         if (log.status === 'OVERTIME' || log.status === 'OT_DAY') {
@@ -3422,6 +3427,14 @@ app.get('/api/payroll/previous-month-data', async (req, res) => {
             autoOtHours += (outH - 20);
           }
         }
+      }
+
+      if (explicitAbsentCount > 0) {
+        autoAbsentDays = explicitAbsentCount;
+      } else if (logs.length > 0) {
+        autoAbsentDays = Math.max(0, 30 - presentCount);
+      } else {
+        autoAbsentDays = 30;
       }
     }
 
