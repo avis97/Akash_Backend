@@ -3458,7 +3458,7 @@ app.get('/api/payroll', async (req, res) => {
     const { userId, month, year } = req.query;
     const where = {
       ...(userId && userId !== 'ALL' && { userId }),
-      ...(month && { month }),
+      ...(month && { month: { equals: month, mode: 'insensitive' } }),
       ...(year && { year: Number(year) })
     };
     const records = await prisma.salaryRecord.findMany({
