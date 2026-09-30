@@ -218,29 +218,67 @@ model ShiftSchedule {
 }
 
 model SalaryRecord {
-  id             String   @id @default(uuid())
-  userId         String
-  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userName       String
-  month          String
-  year           Int
-  baseSalary     Float    @default(0)
-  others1        Float    @default(0)
-  others2        Float    @default(0)
-  others3        Float    @default(0)
-  others4        Float    @default(0)
-  allowances     Float    @default(0)
-  grossSalary    Float    @default(0)
-  overtimeHours  Float    @default(0)
-  overtimePay    Float    @default(0)
-  pfDeduction    Float    @default(0)
-  esiDeduction   Float    @default(0)
-  pTaxDeduction  Float    @default(0)
-  taxDeduction   Float    @default(0)
-  deductions     Float    @default(0)
-  netSalary      Float    @default(0)
-  status         String   @default("PROCESSED") // DRAFT, PROCESSED, PAID
-  generatedAt    DateTime @default(now())
+  id                      String   @id @default(uuid())
+  userId                  String
+  user                    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userName                String
+  month                   String
+  year                    Int
+  baseSalary              Float    @default(0)
+  others1                 Float    @default(0)
+  others2                 Float    @default(0)
+  others3                 Float    @default(0)
+  others4                 Float    @default(0)
+  allowances              Float    @default(0)
+  grossSalary             Float    @default(0)
+  dailyRate               Float    @default(0)
+  hourlyOtRate            Float    @default(0)
+  overtimeHours           Float    @default(0)
+  overtimePay             Float    @default(0)
+  overtimeDays            Float    @default(0)
+  overtimeDaysPay         Float    @default(0)
+  absentDays              Float    @default(0)
+  netAbsentDays           Float    @default(0)
+  netOvertimeDays         Float    @default(0)
+  prevLeaveBalance        Float    @default(14)
+  currMonthLeaveAbsent    Float    @default(0)
+  leaveDeducted           Float    @default(0)
+  absentDeductionPay      Float    @default(0)
+  currLeaveBalance        Float    @default(14)
+  prevLoanDue             Float    @default(0)
+  furtherLoanTaken        Float    @default(0)
+  totalLoan               Float    @default(0)
+  advanceDeductedMode     String   @default("custom")
+  advanceDeducted          Float    @default(0)
+  remLoanDue              Float    @default(0)
+  bonusEnabled            Boolean  @default(false)
+  bonusAmount             Float    @default(0)
+  pfDeduction             Float    @default(0)
+  esiDeduction            Float    @default(0)
+  pTaxDeduction           Float    @default(0)
+  taxDeduction            Float    @default(0)
+  deductions              Float    @default(0)
+  netSalary               Float    @default(0)
+  status                  String   @default("PROCESSED") // DRAFT, PROCESSED, PAID
+  generatedAt             DateTime @default(now())
+}
+
+model PayrollConfig {
+  id                 String   @id @default("default")
+  annualLeaveQuota   Float    @default(14)
+  epfPercent         Float    @default(12)
+  esiPercent         Float    @default(0.75)
+  bonusPercent       Float    @default(8.33)
+  workDaysInMonth    Int      @default(30)
+  workHoursInDay     Int      @default(8)
+  pTaxTier1Max       Float    @default(10000)
+  pTaxTier1Amount    Float    @default(0)
+  pTaxTier2Max       Float    @default(15000)
+  pTaxTier2Amount    Float    @default(110)
+  pTaxTier3Max       Float    @default(25000)
+  pTaxTier3Amount    Float    @default(130)
+  pTaxTier4Amount    Float    @default(200)
+  updatedAt          DateTime @updatedAt
 }
 
 model PersonnelLocation {

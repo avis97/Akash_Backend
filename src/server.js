@@ -1602,154 +1602,7 @@ function calculateHourlyOtFromLogs(attendanceLogs) {
   return otHours;
 }
 
-app.post('/api/payroll/calculate', async (req, res) => {
-  try {
-    const { 
-      userId, userName, month, year, baseSalary, basicSalary, 
-      others1, others2, others3, others4, allowances, deductions, 
-      pTaxDeduction, pTax, epfShare, esiShare, additionalDutyDays = 0,
-      allottedPaidLeaves = 2, updateMasterSalary = true 
-    } = req.body;
-
-    const { user } = await getValidUser(userId, userName);
-    if (!user) {
-      return res.status(400).json({ success: false, message: 'No valid user account found.' });
-    }
-
-    const effectiveUserId = user.id;
-    const effectiveUserName = userName || user.name || 'Staff Member';
-
-    const base = baseSalary !== undefined ? Number(baseSalary) : (basicSalary !== undefined ? Number(basicSalary) : (Number(user?.basicSalary) || Number(user?.baseSalary) || 0));
-    const o1 = others1 !== undefined ? Number(others1) : (Number(user?.others1) || 0);
-    const o2 = others2 !== undefined ? Number(others2) : (Number(user?.others2) || 0);
-    const o3 = others3 !== undefined ? Number(others3) : (Number(user?.others3) || 0);
-    const o4 = others4 !== undefined ? Number(others4) : (Number(user?.others4) || 0);
-
-    const totalMonthlyComp = base + o1 + o2 + o3 + o4;
-    const totalAllow = allowances !== undefined ? Number(allowances) : (o1 + o2 + o3 + o4);
-    const gross = base + totalAllow;
-    const dailyRate = totalMonthlyComp > 0 ? (totalMonthlyComp / 30) : 0;
-
-    // Fetch Attendance Logs & Leaves for calculation
-    let lateCount = 0;
-    let otHours = 0;
-    let addDutyDays = Number(additionalDutyDays) || 0;
-    try {
-      const attLogs = await prisma.attendanceLog.findMany({
-        where: {
-          OR: [
-            { userId: effectiveUserId },
-            { userName: { equals: effectiveUserName, mode: 'insensitive' } }
-          ]
-        }
-      });
-      lateCount = attLogs.filter(a => a.status === 'LATE' || a.status === 'Late').length;
-      otHours = calculateHourlyOtFromLogs(attLogs);
-      const flagAddDuty = attLogs.filter(a => a.isAdditionalDuty).length;
-      if (flagAddDuty > addDutyDays) addDutyDays = flagAddDuty;
-    } catch (e) {}
-
-    // 1 Absent Day per 3 Late Entries rule
-    const lateAbsentDays = Math.floor(lateCount / 3);
-    const lateDeduction = Math.round(lateAbsentDays * dailyRate);
-
-    // Leave handling (Paid leave encashment vs unpaid leave deduction)
-    let approvedLeaves = 0;
-    try {
-      const leaves = await prisma.leaveRequest.findMany({
-        where: {
-          OR: [
-            { userId: effectiveUserId },
-            { userName: { equals: effectiveUserName, mode: 'insensitive' } }
-          ],
-          status: 'APPROVED'
-        }
-      });
-      approvedLeaves = leaves.length;
-    } catch (e) {}
-
-    let leaveEncashmentPay = 0;
-    let unpaidLeaveDeduction = 0;
-    const allotted = Number(allottedPaidLeaves) || Number(user?.allottedLeaves) || 2;
-    if (approvedLeaves <= allotted) {
-      const unusedLeaves = allotted - approvedLeaves;
-      leaveEncashmentPay = Math.round(unusedLeaves * dailyRate);
-    } else {
-      const excessLeaves = approvedLeaves - allotted;
-      unpaidLeaveDeduction = Math.round(excessLeaves * dailyRate);
-    }
-
-    // Overtime Calculations
-    const roundedOtRate = calculateRoundedOtHourlyRate(totalMonthlyComp);
-    const hourlyOtPay = Math.round(otHours * roundedOtRate);
-    const additionalDutyOtPay = Math.round(addDutyDays * dailyRate);
-    const totalOtPay = hourlyOtPay + additionalDutyOtPay;
-
-    // Statutory Deductions
-    const epf = epfShare !== undefined && epfShare !== null ? Number(epfShare) : Math.round(base * 0.12);
-    const esi = esiShare !== undefined && esiShare !== null ? Number(esiShare) : Math.round(gross * 0.0075);
-    const pt = pTax !== undefined && pTax !== null ? Number(pTax) : (pTaxDeduction !== undefined && pTaxDeduction !== null ? Number(pTaxDeduction) : (user?.pTax || 110));
-    const extraDed = Number(deductions) || 0;
-    const totalDed = epf + esi + pt + lateDeduction + unpaidLeaveDeduction + extraDed;
-    const net = gross + totalOtPay + leaveEncashmentPay - totalDed;
-
-    // Save/Update user's master salary structure if updateMasterSalary is enabled
-    if (updateMasterSalary && effectiveUserId) {
-      try {
-        await prisma.user.update({
-          where: { id: effectiveUserId },
-          data: {
-            basicSalary: base,
-            baseSalary: base,
-            salary: base,
-            others1: o1,
-            others2: o2,
-            others3: o3,
-            others4: o4,
-            epfShare: epf,
-            esiShare: esi,
-            pTax: pt
-          }
-        });
-      } catch (uErr) {
-        console.warn('Could not update user master salary record:', uErr);
-      }
-    }
-
-    const newSal = await prisma.salaryRecord.create({
-      data: {
-        userId: effectiveUserId,
-        userName: effectiveUserName,
-        month: month || 'September',
-        year: Number(year) || 2026,
-        baseSalary: base,
-        others1: o1,
-        others2: o2,
-        others3: o3,
-        others4: o4,
-        allowances: totalAllow + totalOtPay + leaveEncashmentPay,
-        grossSalary: gross + totalOtPay + leaveEncashmentPay,
-        overtimeHours: otHours,
-        overtimePay: totalOtPay,
-        pfDeduction: epf,
-        esiDeduction: esi,
-        pTaxDeduction: pt,
-        deductions: totalDed,
-        netSalary: net,
-        status: 'PROCESSED'
-      }
-    });
-
-    await logActivity('Superadmin', `Generated salary slip for ${newSal.userName} (${month} ${year}) - Base ₹${base}, OT ₹${totalOtPay}, Net ₹${net}`, 'Salary Management');
-    return res.status(201).json({ 
-      success: true, 
-      data: newSal, 
-      message: `Salary details updated & payslip generated for ${effectiveUserName}` 
-    });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
-  }
-});
+// Outdated /api/payroll/calculate removed in favor of AKASH ENGINEERING salary engine endpoint below
 
 // HR Monthly Attendance Report & Analytics Endpoint (Superadmin)
 app.get('/api/attendance/monthly-report', async (req, res) => {
@@ -3222,38 +3075,416 @@ app.put('/api/leaves/:id', async (req, res) => {
   }
 });
 
-// Update Salary Slip endpoint
+// Update User Basic Salary & Allowances endpoint
+app.patch('/api/users/:id/basic-salary', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { basicSalary, others1, others2, others3, others4, epfShare, esiShare, pTax } = req.body;
+
+    const b = Number(basicSalary) || 0;
+    const o1 = Number(others1) || 0;
+    const o2 = Number(others2) || 0;
+    const o3 = Number(others3) || 0;
+    const o4 = Number(others4) || 0;
+    const totalAllowances = o1 + o2 + o3 + o4;
+    const grossSalary = b + totalAllowances;
+
+    const updatedUser = await prisma.user.update({
+      where: { id },
+      data: {
+        basicSalary: b,
+        others1: o1,
+        others2: o2,
+        others3: o3,
+        others4: o4,
+        totalAllowances,
+        grossSalary,
+        ...(epfShare !== undefined && { epfShare: Number(epfShare) }),
+        ...(esiShare !== undefined && { esiShare: Number(esiShare) }),
+        ...(pTax !== undefined && { pTax: Number(pTax) })
+      }
+    });
+
+    await logActivity('Admin', `Updated salary details for user #${id}`, 'Salary Management');
+    return res.json({ success: true, user: updatedUser });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Helper: Calculate Payroll Details following AKASH ENGINEERING rules (a to v)
+async function getOrInitPayrollConfig() {
+  try {
+    let conf = await prisma.payrollConfig.findUnique({ where: { id: 'default' } });
+    if (!conf) {
+      conf = await prisma.payrollConfig.create({
+        data: { id: 'default' }
+      });
+    }
+    return conf;
+  } catch (err) {
+    return {
+      annualLeaveQuota: 14,
+      epfPercent: 12,
+      esiPercent: 0.75,
+      bonusPercent: 8.33,
+      workDaysInMonth: 30,
+      workHoursInDay: 8,
+      pTaxTier1Max: 10000,
+      pTaxTier1Amount: 0,
+      pTaxTier2Max: 15000,
+      pTaxTier2Amount: 110,
+      pTaxTier3Max: 25000,
+      pTaxTier3Amount: 130,
+      pTaxTier4Amount: 200
+    };
+  }
+}
+
+function calculatePayrollEngine(input, config, prevRecord) {
+  const basic = Number(input.basicSalary !== undefined ? input.basicSalary : input.baseSalary) || 0;
+  const o1 = Number(input.others1) || 0;
+  const o2 = Number(input.others2) || 0;
+  const o3 = Number(input.others3) || 0;
+  const o4 = Number(input.others4) || 0;
+  const grossBase = basic + o1 + o2 + o3 + o4;
+
+  const workDays = config?.workDaysInMonth || 30;
+  const workHours = config?.workHoursInDay || 8;
+
+  // Rule (a): Daily rate = (basic + four others payment) / 30
+  const dailyRate = grossBase / workDays;
+
+  // Rule (b): Hourly OT rate = (basic + four others payment) / 30 / 8
+  let rawHourlyOtRate = dailyRate / workHours;
+  let hourlyOtRate = rawHourlyOtRate;
+  // Step-rounding rule (e.g. 32.50..37.50 -> 35.00, 27.50..32.00 -> 30.00 => rounded to nearest multiple of 5)
+  if (rawHourlyOtRate > 0) {
+    hourlyOtRate = Math.round(rawHourlyOtRate / 5) * 5;
+  }
+
+  const overtimeHours = Number(input.overtimeHours) || 0;
+  const overtimePay = overtimeHours * hourlyOtRate;
+
+  // Rule (c): Offset Overtime Days & Absent Days against each other
+  const rawOtDays = Number(input.overtimeDays) || 0;
+  const rawAbsentDays = Number(input.absentDays) || 0;
+  let netOtDays = 0;
+  let netAbsentDays = 0;
+  if (rawOtDays >= rawAbsentDays) {
+    netOtDays = rawOtDays - rawAbsentDays;
+    netAbsentDays = 0;
+  } else {
+    netAbsentDays = rawAbsentDays - rawOtDays;
+    netOtDays = 0;
+  }
+  const overtimeDaysPay = netOtDays * dailyRate;
+
+  // Rule (d), (e), (p), (q), (r): Leave calculation & balance tracking
+  let prevLeaveBalance = config?.annualLeaveQuota !== undefined ? config.annualLeaveQuota : 14;
+  if (input.prevLeaveBalance !== undefined && input.prevLeaveBalance !== null && input.prevLeaveBalance !== '') {
+    prevLeaveBalance = Number(input.prevLeaveBalance);
+  } else if (prevRecord && prevRecord.currLeaveBalance !== undefined && prevRecord.currLeaveBalance !== null) {
+    prevLeaveBalance = Number(prevRecord.currLeaveBalance);
+  }
+
+  const currMonthLeaveAbsent = netAbsentDays; // Rule (d)
+  let leaveDeducted = 0;
+  let currLeaveBalance = 0;
+
+  if (currMonthLeaveAbsent > prevLeaveBalance) { // Rule (e) & (q)
+    leaveDeducted = currMonthLeaveAbsent - prevLeaveBalance;
+    currLeaveBalance = 0;
+  } else { // Rule (r)
+    leaveDeducted = 0;
+    currLeaveBalance = prevLeaveBalance - currMonthLeaveAbsent;
+  }
+  const absentDeductionPay = leaveDeducted * dailyRate;
+
+  // Rule (f), (g), (h), (i): Loan / Advance calculation
+  let prevLoanDue = 0;
+  if (input.prevLoanDue !== undefined && input.prevLoanDue !== null && input.prevLoanDue !== '') {
+    prevLoanDue = Number(input.prevLoanDue);
+  } else if (prevRecord && prevRecord.remLoanDue !== undefined && prevRecord.remLoanDue !== null) {
+    prevLoanDue = Number(prevRecord.remLoanDue);
+  }
+
+  const furtherLoanTaken = Number(input.furtherLoanTaken) || 0;
+  const totalLoan = prevLoanDue + furtherLoanTaken;
+
+  let advanceDeducted = 0;
+  const advanceDeductedMode = input.advanceDeductedMode || 'custom';
+  if (advanceDeductedMode === 'full') {
+    advanceDeducted = totalLoan;
+  } else if (advanceDeductedMode === '1000') {
+    advanceDeducted = Math.min(1000, totalLoan);
+  } else if (advanceDeductedMode === '2000') {
+    advanceDeducted = Math.min(2000, totalLoan);
+  } else {
+    advanceDeducted = Number(input.advanceDeducted) || 0;
+  }
+  const remLoanDue = Math.max(0, totalLoan - advanceDeducted);
+
+  // Rule (j): EPF = basic * 12%
+  const epfDeduction = input.epfShare !== undefined && input.epfShare !== null && input.epfShare !== ''
+    ? Number(input.epfShare)
+    : Math.round(basic * (config?.epfPercent || 12) / 100);
+
+  // Rule (k): ESI = grossBase * 0.75%
+  const esiDeduction = input.esiShare !== undefined && input.esiShare !== null && input.esiShare !== ''
+    ? Number(input.esiShare)
+    : Math.round(grossBase * (config?.esiPercent || 0.75) / 100);
+
+  // Rule (l): Professional Tax
+  let pTaxDeduction = 0;
+  if (input.pTax !== undefined && input.pTax !== null && input.pTax !== '') {
+    pTaxDeduction = Number(input.pTax);
+  } else {
+    if (grossBase > (config?.pTaxTier3Max || 25000)) pTaxDeduction = config?.pTaxTier4Amount || 200;
+    else if (grossBase > (config?.pTaxTier2Max || 15000)) pTaxDeduction = config?.pTaxTier3Amount || 130;
+    else if (grossBase > (config?.pTaxTier1Max || 10000)) pTaxDeduction = config?.pTaxTier2Amount || 110;
+    else pTaxDeduction = config?.pTaxTier1Amount || 0;
+  }
+
+  // Rule (t): Bonus @ 8.33% on basic
+  const bonusEnabled = Boolean(input.bonusEnabled);
+  const bonusAmount = bonusEnabled ? Math.round(basic * (config?.bonusPercent || 8.33) / 100) : 0;
+
+  // Earnings & Deductions totals
+  const grossSalary = grossBase + overtimeDaysPay + overtimePay + bonusAmount;
+  const totalDeductions = absentDeductionPay + advanceDeducted + epfDeduction + esiDeduction + pTaxDeduction;
+
+  // Rule (m) & (n): Net Take Home Salary
+  const netSalary = Math.round(grossSalary - totalDeductions);
+
+  return {
+    baseSalary: basic,
+    others1: o1,
+    others2: o2,
+    others3: o3,
+    others4: o4,
+    allowances: o1 + o2 + o3 + o4,
+    grossSalary,
+    dailyRate,
+    hourlyOtRate,
+    overtimeHours,
+    overtimePay,
+    overtimeDays: rawOtDays,
+    overtimeDaysPay,
+    absentDays: rawAbsentDays,
+    netAbsentDays,
+    netOvertimeDays: netOtDays,
+    prevLeaveBalance,
+    currMonthLeaveAbsent,
+    leaveDeducted,
+    absentDeductionPay,
+    currLeaveBalance,
+    prevLoanDue,
+    furtherLoanTaken,
+    totalLoan,
+    advanceDeductedMode,
+    advanceDeducted,
+    remLoanDue,
+    bonusEnabled,
+    bonusAmount,
+    pfDeduction: epfDeduction,
+    esiDeduction,
+    pTaxDeduction,
+    taxDeduction: 0,
+    deductions: totalDeductions,
+    netSalary
+  };
+}
+
+// GET Payroll Config endpoint (Super Admin)
+app.get('/api/payroll/config', async (req, res) => {
+  try {
+    const config = await getOrInitPayrollConfig();
+    return res.json({ success: true, data: config });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// POST Payroll Config endpoint (Super Admin)
+app.post('/api/payroll/config', async (req, res) => {
+  try {
+    const { annualLeaveQuota, epfPercent, esiPercent, bonusPercent, workDaysInMonth, workHoursInDay, pTaxTier1Amount, pTaxTier2Amount, pTaxTier3Amount, pTaxTier4Amount } = req.body;
+    const updated = await prisma.payrollConfig.upsert({
+      where: { id: 'default' },
+      update: {
+        ...(annualLeaveQuota !== undefined && { annualLeaveQuota: Number(annualLeaveQuota) }),
+        ...(epfPercent !== undefined && { epfPercent: Number(epfPercent) }),
+        ...(esiPercent !== undefined && { esiPercent: Number(esiPercent) }),
+        ...(bonusPercent !== undefined && { bonusPercent: Number(bonusPercent) }),
+        ...(workDaysInMonth !== undefined && { workDaysInMonth: Number(workDaysInMonth) }),
+        ...(workHoursInDay !== undefined && { workHoursInDay: Number(workHoursInDay) }),
+        ...(pTaxTier1Amount !== undefined && { pTaxTier1Amount: Number(pTaxTier1Amount) }),
+        ...(pTaxTier2Amount !== undefined && { pTaxTier2Amount: Number(pTaxTier2Amount) }),
+        ...(pTaxTier3Amount !== undefined && { pTaxTier3Amount: Number(pTaxTier3Amount) }),
+        ...(pTaxTier4Amount !== undefined && { pTaxTier4Amount: Number(pTaxTier4Amount) })
+      },
+      create: {
+        id: 'default',
+        annualLeaveQuota: Number(annualLeaveQuota) || 14,
+        epfPercent: Number(epfPercent) || 12,
+        esiPercent: Number(esiPercent) || 0.75,
+        bonusPercent: Number(bonusPercent) || 8.33,
+        workDaysInMonth: Number(workDaysInMonth) || 30,
+        workHoursInDay: Number(workHoursInDay) || 8
+      }
+    });
+    await logActivity('Super Admin', 'Updated Payroll & Salary Settings', 'Salary Management');
+    return res.json({ success: true, data: updated });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// GET Previous Month's Carryforward Data (Leave Balance & Loan Due)
+app.get('/api/payroll/previous-month-data', async (req, res) => {
+  try {
+    const { userId } = req.query;
+    if (!userId) return res.status(400).json({ success: false, message: 'userId parameter is required' });
+
+    // Fetch latest salary record for user ordered by generatedAt desc
+    const lastRecord = await prisma.salaryRecord.findFirst({
+      where: { userId },
+      orderBy: { generatedAt: 'desc' }
+    });
+
+    const config = await getOrInitPayrollConfig();
+
+    return res.json({
+      success: true,
+      prevLeaveBalance: lastRecord ? lastRecord.currLeaveBalance : config.annualLeaveQuota,
+      prevLoanDue: lastRecord ? lastRecord.remLoanDue : 0,
+      lastRecord
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// GET Salary Records list
+app.get('/api/payroll', async (req, res) => {
+  try {
+    const { userId, month, year } = req.query;
+    const where = {
+      ...(userId && userId !== 'ALL' && { userId }),
+      ...(month && { month }),
+      ...(year && { year: Number(year) })
+    };
+    const records = await prisma.salaryRecord.findMany({
+      where,
+      orderBy: { generatedAt: 'desc' },
+      include: { user: true }
+    });
+    return res.json({ success: true, data: records });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// POST Calculate Payroll preview without persisting
+app.post('/api/payroll/calculate', async (req, res) => {
+  try {
+    const config = await getOrInitPayrollConfig();
+    const userId = req.body.userId;
+    let prevRecord = null;
+    if (userId) {
+      prevRecord = await prisma.salaryRecord.findFirst({
+        where: { userId },
+        orderBy: { generatedAt: 'desc' }
+      });
+    }
+    const computed = calculatePayrollEngine(req.body, config, prevRecord);
+    return res.json({ success: true, data: computed });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// POST Create or Update Salary Slip Record
+app.post('/api/payroll', async (req, res) => {
+  try {
+    const { userId, month, year } = req.body;
+    if (!userId) return res.status(400).json({ success: false, message: 'User ID is required' });
+
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+    const config = await getOrInitPayrollConfig();
+
+    const prevRecord = await prisma.salaryRecord.findFirst({
+      where: { userId },
+      orderBy: { generatedAt: 'desc' }
+    });
+
+    const computed = calculatePayrollEngine(req.body, config, prevRecord);
+
+    const yearNum = Number(year) || new Date().getFullYear();
+    const monthStr = month || 'September';
+
+    // Upsert record for same user, month & year
+    const existing = await prisma.salaryRecord.findFirst({
+      where: { userId, month: monthStr, year: yearNum }
+    });
+
+    let record;
+    if (existing) {
+      record = await prisma.salaryRecord.update({
+        where: { id: existing.id },
+        data: {
+          userName: user.name,
+          ...computed,
+          status: 'PROCESSED',
+          generatedAt: new Date()
+        }
+      });
+    } else {
+      record = await prisma.salaryRecord.create({
+        data: {
+          userId,
+          userName: user.name,
+          month: monthStr,
+          year: yearNum,
+          ...computed,
+          status: 'PROCESSED'
+        }
+      });
+    }
+
+    await logActivity('HR Admin', `Generated salary slip for ${user.name} (${monthStr} ${yearNum})`, 'Salary Management');
+    return res.json({ success: true, message: `Payslip for ${user.name} processed successfully!`, data: record });
+  } catch (err) {
+    console.error('Error generating payroll:', err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// PUT Update Salary Slip endpoint
 app.put('/api/payroll/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { month, year, baseSalary, overtimeHours, allowances, deductions, status } = req.body;
+    const existing = await prisma.salaryRecord.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ success: false, message: 'Salary record not found' });
 
-    const sal = await prisma.salaryRecord.findUnique({ where: { id } });
-    if (!sal) return res.status(404).json({ success: false, message: 'Salary record not found' });
+    const config = await getOrInitPayrollConfig();
+    const prevRecord = await prisma.salaryRecord.findFirst({
+      where: { userId: existing.userId, id: { not: id } },
+      orderBy: { generatedAt: 'desc' }
+    });
 
-    const base = baseSalary !== undefined ? Number(baseSalary) : sal.baseSalary;
-    const otHrs = overtimeHours !== undefined ? Number(overtimeHours) : sal.overtimeHours;
-    const otPay = otHrs * 350;
-    const allow = allowances !== undefined ? Number(allowances) : sal.allowances;
-    const ded = deductions !== undefined ? Number(deductions) : sal.deductions;
-    const pf = Math.round(base * 0.04);
-    const tax = Math.round(base * 0.03);
-    const net = base + otPay + allow - ded - pf - tax;
+    const computed = calculatePayrollEngine({ ...existing, ...req.body }, config, prevRecord);
 
     const updated = await prisma.salaryRecord.update({
       where: { id },
       data: {
-        ...(month && { month }),
-        ...(year && { year: Number(year) }),
-        baseSalary: base,
-        overtimeHours: otHrs,
-        overtimePay: otPay,
-        allowances: allow,
-        deductions: ded,
-        pfDeduction: pf,
-        taxDeduction: tax,
-        netSalary: net,
-        ...(status && { status })
+        ...(req.body.month && { month: req.body.month }),
+        ...(req.body.year && { year: Number(req.body.year) }),
+        ...computed,
+        ...(req.body.status && { status: req.body.status })
       }
     });
 
