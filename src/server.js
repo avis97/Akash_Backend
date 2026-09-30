@@ -3341,11 +3341,33 @@ app.post('/api/payroll/config', async (req, res) => {
   }
 });
 
-// GET Previous Month's Carryforward Data (Leave Balance & Loan Due)
+// Helper to parse "08:30 AM" or "20:30" string to decimal 24-hour float
+function parseTimeTo24Hour(timeStr) {
+  if (!timeStr) return null;
+  const str = timeStr.trim().toUpperCase();
+  const isPM = str.includes('PM');
+  const isAM = str.includes('AM');
+  const clean = str.replace(/(AM|PM)/g, '').trim();
+  const parts = clean.split(':');
+  if (parts.length < 2) return null;
+  let hours = parseInt(parts[0], 10);
+  let minutes = parseInt(parts[1], 10) || 0;
+  if (isNaN(hours)) return null;
+
+  if (isPM && hours < 12) hours += 12;
+  if (isAM && hours === 12) hours = 0;
+
+  return hours + (minutes / 60);
+}
+
+// GET Previous Month's Carryforward Data & Auto Attendance Stats
 app.get('/api/payroll/previous-month-data', async (req, res) => {
   try {
-    const { userId } = req.query;
+    const { userId, month, year } = req.query;
     if (!userId) return res.status(400).json({ success: false, message: 'userId parameter is required' });
+
+    // Fetch user for matching name if needed
+    const dbUser = await prisma.user.findUnique({ where: { id: userId } });
 
     // Fetch latest salary record for user ordered by generatedAt desc
     const lastRecord = await prisma.salaryRecord.findFirst({
@@ -3355,10 +3377,61 @@ app.get('/api/payroll/previous-month-data', async (req, res) => {
 
     const config = await getOrInitPayrollConfig();
 
+    let autoOtHours = 0;
+    let autoOtDays = 0;
+    let autoAbsentDays = 0;
+
+    if (month && year) {
+      const monthMap = {
+        'January': 0, 'February': 1, 'March': 2, 'April': 3, 'May': 4, 'June': 5,
+        'July': 6, 'August': 7, 'September': 8, 'October': 9, 'November': 10, 'December': 11
+      };
+      const mIdx = monthMap[month] !== undefined ? monthMap[month] : 8;
+      const yr = Number(year) || 2026;
+      const startDate = new Date(yr, mIdx, 1, 0, 0, 0);
+      const endDate = new Date(yr, mIdx + 1, 0, 23, 59, 59);
+
+      const logs = await prisma.attendanceLog.findMany({
+        where: {
+          OR: [
+            { userId },
+            ...(dbUser?.name ? [{ userName: { equals: dbUser.name, mode: 'insensitive' } }] : [])
+          ],
+          date: { gte: startDate, lte: endDate }
+        }
+      });
+
+      for (const log of logs) {
+        if (log.status === 'ABSENT' || log.status === 'Absent') {
+          autoAbsentDays += 1;
+        }
+
+        if (log.status === 'OVERTIME' || log.status === 'OT_DAY') {
+          autoOtDays += 1;
+        }
+
+        if (log.checkInTime) {
+          const inH = parseTimeTo24Hour(log.checkInTime);
+          if (inH !== null && inH < 9) {
+            autoOtHours += (9 - inH);
+          }
+        }
+        if (log.checkOutTime) {
+          const outH = parseTimeTo24Hour(log.checkOutTime);
+          if (outH !== null && outH > 20) {
+            autoOtHours += (outH - 20);
+          }
+        }
+      }
+    }
+
     return res.json({
       success: true,
       prevLeaveBalance: lastRecord ? lastRecord.currLeaveBalance : config.annualLeaveQuota,
       prevLoanDue: lastRecord ? lastRecord.remLoanDue : 0,
+      autoOtHours: Math.round(autoOtHours * 10) / 10,
+      autoOtDays,
+      autoAbsentDays,
       lastRecord
     });
   } catch (err) {
