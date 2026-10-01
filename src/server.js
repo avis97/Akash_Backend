@@ -1841,6 +1841,45 @@ app.get('/api/tracking/locations', async (req, res) => {
   }
 });
 
+// Fetch latest position for each user
+app.get('/api/tracking/last-positions', async (req, res) => {
+  try {
+    const allLocations = await prisma.personnelLocation.findMany({
+      orderBy: { updatedAt: 'desc' },
+      include: { user: { select: { id: true, name: true, designation: true, phone: true, role: true } } }
+    });
+    const lastPositionsMap = new Map();
+    allLocations.forEach(loc => {
+      const key = loc.userId || loc.userName;
+      if (!lastPositionsMap.has(key)) {
+        lastPositionsMap.set(key, loc);
+      }
+    });
+    const lastPositions = Array.from(lastPositionsMap.values());
+    return res.json({ success: true, data: lastPositions });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Fetch last position for a specific user ID
+app.get('/api/tracking/last-position/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const location = await prisma.personnelLocation.findFirst({
+      where: { userId },
+      orderBy: { updatedAt: 'desc' },
+      include: { user: { select: { id: true, name: true, designation: true, phone: true, role: true } } }
+    });
+    if (!location) {
+      return res.status(404).json({ success: false, message: 'No location records found for this user.' });
+    }
+    return res.json({ success: true, data: location });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // Auto fetch location by user phone number
 app.get('/api/tracking/location-by-phone', async (req, res) => {
   try {
