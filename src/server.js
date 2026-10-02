@@ -2403,6 +2403,45 @@ app.patch('/api/billing/quotations/:id/accept', async (req, res) => {
   }
 });
 
+// REJECT QUOTATION (Status becomes REJECTED)
+app.patch('/api/billing/quotations/:id/reject', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { rejectedBy } = req.body;
+    const existing = await prisma.quotation.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ success: false, message: 'Quotation not found' });
+
+    // 1. Update Quotation Status to REJECTED
+    const updatedQuot = await prisma.quotation.update({
+      where: { id },
+      data: { status: 'REJECTED' }
+    });
+
+    // 2. Update Client lead status in database
+    if (existing.clientId) {
+      await prisma.user.update({
+        where: { id: existing.clientId },
+        data: { clientStatus: 'QUOTATION_REJECTED' }
+      }).catch(e => console.warn('Could not update client status:', e));
+    }
+
+    await logActivity(
+      rejectedBy || existing.clientName || 'Client',
+      `Quotation #${existing.quotationNumber} was marked REJECTED.`,
+      'Billing & Quotations'
+    );
+
+    return res.json({
+      success: true,
+      message: `Quotation #${existing.quotationNumber} rejected.`,
+      data: updatedQuot
+    });
+  } catch (err) {
+    console.error('Error rejecting quotation:', err);
+    return res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
+  }
+});
+
 // SUPERADMIN GENERATES BILL (TAX INVOICE) FROM ACCEPTED QUOTATION & DEDUCTS PRODUCT INVENTORY
 app.post('/api/billing/quotations/:id/generate-bill', async (req, res) => {
   try {
