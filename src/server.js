@@ -2229,26 +2229,66 @@ app.get('/api/billing/quotations', async (req, res) => {
   }
 });
 
+async function generateNextQuotationNumber() {
+  const count = await prisma.quotation.count();
+  const nextNum = 327 + count;
+  let qNo = `AKASH/QTN/25-26/${nextNum}`;
+  let existing = await prisma.quotation.findUnique({ where: { quotationNumber: qNo } });
+  let offset = 1;
+  while (existing) {
+    qNo = `AKASH/QTN/25-26/${nextNum + offset}`;
+    existing = await prisma.quotation.findUnique({ where: { quotationNumber: qNo } });
+    offset++;
+  }
+  return qNo;
+}
+
+async function generateNextInvoiceNumber() {
+  const count = await prisma.invoice.count();
+  const nextNum = 327 + count;
+  let invNo = `AKASH/INV/25-26/${nextNum}`;
+  let existing = await prisma.invoice.findUnique({ where: { invoiceNumber: invNo } });
+  let offset = 1;
+  while (existing) {
+    invNo = `AKASH/INV/25-26/${nextNum + offset}`;
+    existing = await prisma.invoice.findUnique({ where: { invoiceNumber: invNo } });
+    offset++;
+  }
+  return invNo;
+}
+
 app.post('/api/billing/quotations', async (req, res) => {
   try {
-    const { clientId, clientName, clientEmail, totalAmount, items } = req.body;
-    const total = Number(totalAmount) || 50000;
-    const gst = Math.round(total * 0.18);
-    const grand = total + gst;
-    const qNo = `QT/2026/${Math.floor(100 + Math.random() * 900)}`;
+    const { 
+      quotationNumber, documentHead, subject, kindAttention, clientId, clientName, clientEmail, clientPhone, clientAddress, clientGst, clientPan, preface, termsAndConditions, totalAmount, gstAmount, grandTotal, items, validUntil 
+    } = req.body;
+
+    const total = Number(totalAmount) || 0;
+    const gst = gstAmount !== undefined ? Number(gstAmount) : Math.round(total * 0.18);
+    const grand = grandTotal !== undefined ? Number(grandTotal) : total + gst;
+    const qNo = quotationNumber ? quotationNumber.trim() : await generateNextQuotationNumber();
 
     const newQ = await prisma.quotation.create({
       data: {
         quotationNumber: qNo,
+        documentHead: documentHead || 'QUOTATION / PROPOSAL',
+        subject: subject || null,
+        kindAttention: kindAttention || null,
         clientId: clientId || null,
-        clientName,
-        clientEmail,
+        clientName: clientName || 'Client Organization',
+        clientEmail: clientEmail || '',
+        clientPhone: clientPhone || null,
+        clientAddress: clientAddress || null,
+        clientGst: clientGst || null,
+        clientPan: clientPan || null,
+        preface: preface || null,
+        termsAndConditions: typeof termsAndConditions === 'object' ? JSON.stringify(termsAndConditions) : (termsAndConditions || null),
         totalAmount: total,
         gstAmount: gst,
         grandTotal: grand,
         status: 'SENT',
-        validUntil: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-        itemsJson: JSON.stringify(items || [{ name: 'Service & System Installation', qty: 1, total }])
+        validUntil: validUntil ? new Date(validUntil) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        itemsJson: JSON.stringify(items || [{ name: 'Service & System Installation', qty: 1, amount: total, total }])
       }
     });
 
@@ -2271,21 +2311,35 @@ app.post('/api/billing/quotations', async (req, res) => {
 app.put('/api/billing/quotations/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { clientName, clientEmail, totalAmount, status } = req.body;
+    const { 
+      quotationNumber, documentHead, subject, kindAttention, clientName, clientEmail, clientPhone, clientAddress, clientGst, clientPan, preface, termsAndConditions, totalAmount, gstAmount, grandTotal, status, items, validUntil 
+    } = req.body;
     const existing = await prisma.quotation.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ success: false, message: 'Quotation not found' });
 
-    const total = totalAmount ? Number(totalAmount) : existing.totalAmount;
-    const gst = Math.round(total * 0.18);
-    const grand = total + gst;
+    const total = totalAmount !== undefined ? Number(totalAmount) : existing.totalAmount;
+    const gst = gstAmount !== undefined ? Number(gstAmount) : Math.round(total * 0.18);
+    const grand = grandTotal !== undefined ? Number(grandTotal) : total + gst;
 
     const updated = await prisma.quotation.update({
       where: { id },
       data: {
+        ...(quotationNumber && { quotationNumber }),
+        ...(documentHead && { documentHead }),
+        ...(subject !== undefined && { subject }),
+        ...(kindAttention !== undefined && { kindAttention }),
         ...(clientName && { clientName }),
         ...(clientEmail && { clientEmail }),
-        ...(totalAmount && { totalAmount: total, gstAmount: gst, grandTotal: grand }),
-        ...(status && { status })
+        ...(clientPhone !== undefined && { clientPhone }),
+        ...(clientAddress !== undefined && { clientAddress }),
+        ...(clientGst !== undefined && { clientGst }),
+        ...(clientPan !== undefined && { clientPan }),
+        ...(preface !== undefined && { preface }),
+        ...(termsAndConditions !== undefined && { termsAndConditions: typeof termsAndConditions === 'object' ? JSON.stringify(termsAndConditions) : termsAndConditions }),
+        ...(totalAmount !== undefined && { totalAmount: total, gstAmount: gst, grandTotal: grand }),
+        ...(status && { status }),
+        ...(validUntil && { validUntil: new Date(validUntil) }),
+        ...(items && { itemsJson: JSON.stringify(items) })
       }
     });
 
@@ -2353,11 +2407,11 @@ app.patch('/api/billing/quotations/:id/accept', async (req, res) => {
 app.post('/api/billing/quotations/:id/generate-bill', async (req, res) => {
   try {
     const { id } = req.params;
-    const { generatedBy } = req.body;
+    const { generatedBy, invoiceNumber } = req.body;
     const existing = await prisma.quotation.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ success: false, message: 'Quotation not found' });
 
-    const invNo = `INV/VS/2026/${Math.floor(100 + Math.random() * 900)}`;
+    const invNo = invoiceNumber ? invoiceNumber.trim() : await generateNextInvoiceNumber();
     const billAmount = existing.grandTotal || existing.totalAmount;
 
     let itemsParsed = [];
@@ -2367,7 +2421,7 @@ app.post('/api/billing/quotations/:id/generate-bill', async (req, res) => {
       itemsParsed = [{ name: 'Service & System Installation', qty: 1, amount: billAmount }];
     }
 
-    // 1. GENERATE FINAL TAX INVOICE IN DATABASE
+    // 1. GENERATE FINAL TAX INVOICE IN DATABASE WITH ALL AKASH ENGINEERING DETAILS
     const generatedInvoice = await prisma.invoice.create({
       data: {
         invoiceNumber: invNo,
@@ -2375,6 +2429,15 @@ app.post('/api/billing/quotations/:id/generate-bill', async (req, res) => {
         clientId: existing.clientId || null,
         clientName: existing.clientName,
         clientEmail: existing.clientEmail,
+        clientPhone: existing.clientPhone,
+        clientAddress: existing.clientAddress,
+        clientGst: existing.clientGst,
+        clientPan: existing.clientPan,
+        documentHead: 'TAX INVOICE',
+        subject: existing.subject,
+        kindAttention: existing.kindAttention,
+        preface: existing.preface,
+        termsAndConditions: existing.termsAndConditions,
         totalAmount: billAmount,
         paidAmount: 0,
         balanceAmount: billAmount,
@@ -2436,18 +2499,48 @@ app.get('/api/billing/invoices', async (req, res) => {
 
 app.post('/api/billing/invoices', async (req, res) => {
   try {
-    const { clientId, clientName, clientEmail, totalAmount, dueDate, items, quotationId } = req.body;
-    const total = Number(totalAmount) || 65000;
-    const invNo = `INV/VS/2026/${Math.floor(100 + Math.random() * 900)}`;
+    const { 
+      invoiceNumber, documentHead, subject, kindAttention, clientId, clientName, clientEmail, clientPhone, clientAddress, clientGst, clientPan, preface, termsAndConditions, totalAmount, dueDate, items, quotationId 
+    } = req.body;
+
+    const total = Number(totalAmount) || 0;
+    const invNo = invoiceNumber ? invoiceNumber.trim() : await generateNextInvoiceNumber();
 
     const newInv = await prisma.invoice.create({
       data: {
         invoiceNumber: invNo,
+        documentHead: documentHead || 'TAX INVOICE',
         quotationId: quotationId || null,
         clientId: clientId || null,
-        clientName,
-        clientEmail,
+        clientName: clientName || 'Client Organization',
+        clientEmail: clientEmail || '',
+        clientPhone: clientPhone || null,
+        clientAddress: clientAddress || null,
+        clientGst: clientGst || null,
+        clientPan: clientPan || null,
+        subject: subject || null,
+        kindAttention: kindAttention || null,
+        preface: preface || null,
+        termsAndConditions: typeof termsAndConditions === 'object' ? JSON.stringify(termsAndConditions) : (termsAndConditions || null),
         totalAmount: total,
+        paidAmount: 0,
+        balanceAmount: total,
+        dueDate: dueDate ? new Date(dueDate) : new Date(Date.now() + 15 * 24 * 60 * 60 * 1000),
+        status: 'UNPAID',
+        itemsJson: JSON.stringify(items || [{ name: 'Equipment Supply & Setup', qty: 1, amount: total }])
+      }
+    });
+
+    if (items) {
+      await deductInventoryStockForItems(items, invNo, req.user?.name || 'Superadmin');
+    }
+
+    await logActivity('Billing Officer', `Issued Invoice #${newInv.invoiceNumber} to ${clientName} (₹${total}) and updated Inventory stock`, 'Billing & Invoicing');
+    return res.status(201).json({ success: true, data: newInv });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
+  }
+});
         paidAmount: 0,
         balanceAmount: total,
         dueDate: dueDate ? new Date(dueDate) : new Date(Date.now() + 15 * 24 * 60 * 60 * 1000),

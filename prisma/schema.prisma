@@ -350,44 +350,61 @@ model InventoryTransaction {
 }
 
 model Quotation {
-  id              String   @id @default(uuid())
-  quotationNumber String   @unique
-  clientId        String?
-  client          User?    @relation("ClientQuotations", fields: [clientId], references: [id], onDelete: SetNull)
-  clientName      String
-  clientEmail     String
-  clientPhone     String?
-  totalAmount     Float
-  gstAmount       Float
-  grandTotal      Float
-  status          String   @default("DRAFT") // DRAFT, SENT, APPROVED, REJECTED
-  validUntil      DateTime
-  itemsJson       String   // JSON string of item line details
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id                 String   @id @default(uuid())
+  quotationNumber    String   @unique
+  clientId           String?
+  client             User?    @relation("ClientQuotations", fields: [clientId], references: [id], onDelete: SetNull)
+  clientName         String
+  clientEmail        String
+  clientPhone        String?
+  clientAddress      String?
+  clientGst          String?
+  clientPan          String?
+  documentHead       String?  @default("QUOTATION / PROPOSAL")
+  subject            String?
+  kindAttention      String?
+  preface            String?
+  termsAndConditions String?
+  totalAmount        Float
+  gstAmount          Float
+  grandTotal         Float
+  status             String   @default("DRAFT") // DRAFT, SENT, APPROVED, REJECTED
+  validUntil         DateTime
+  itemsJson          String   // JSON string of item line details
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
-  invoices        Invoice[]
+  invoices           Invoice[]
 }
 
 model Invoice {
-  id            String        @id @default(uuid())
-  invoiceNumber String        @unique
-  quotationId   String?
-  quotation     Quotation?    @relation(fields: [quotationId], references: [id], onDelete: SetNull)
-  clientId      String?
-  client        User?         @relation("ClientInvoices", fields: [clientId], references: [id], onDelete: SetNull)
-  clientName    String
-  clientEmail   String
-  totalAmount   Float
-  paidAmount    Float         @default(0)
-  balanceAmount Float
-  dueDate       DateTime
-  status        InvoiceStatus @default(UNPAID)
-  itemsJson     String
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
+  id                 String        @id @default(uuid())
+  invoiceNumber      String        @unique
+  quotationId        String?
+  quotation          Quotation?    @relation(fields: [quotationId], references: [id], onDelete: SetNull)
+  clientId           String?
+  client             User?         @relation("ClientInvoices", fields: [clientId], references: [id], onDelete: SetNull)
+  clientName         String
+  clientEmail        String
+  clientPhone        String?
+  clientAddress      String?
+  clientGst          String?
+  clientPan          String?
+  documentHead       String?       @default("TAX INVOICE")
+  subject            String?
+  kindAttention      String?
+  preface            String?
+  termsAndConditions String?
+  totalAmount        Float
+  paidAmount         Float         @default(0)
+  balanceAmount      Float
+  dueDate            DateTime
+  status             InvoiceStatus @default(UNPAID)
+  itemsJson          String
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
 
-  reminders     PaymentReminder[]
+  reminders          PaymentReminder[]
 }
 
 model PaymentReminder {
