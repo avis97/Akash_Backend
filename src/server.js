@@ -59,7 +59,18 @@ async function logActivity(userName, action, module) {
 function formatDbErrorMessage(err) {
   if (err && err.message) {
     if (err.code === 'P2002' || err.message.includes('Unique constraint failed')) {
-      return 'A product with this SKU / Code already exists. Please use a unique SKU code.';
+      const target = err.meta?.target;
+      const targetStr = Array.isArray(target) ? target.join(', ') : String(target || err.message);
+      if (targetStr.includes('code') || err.message.includes('(`code`)')) {
+        return 'A product with this SKU / Code already exists. Please use a unique SKU code.';
+      }
+      if (targetStr.includes('quotationNumber') || err.message.includes('(`quotationNumber`)')) {
+        return 'A quotation with this Quotation Number already exists. Please use a unique quotation number.';
+      }
+      if (targetStr.includes('invoiceNumber') || err.message.includes('(`invoiceNumber`)')) {
+        return 'An invoice with this Invoice Number already exists. Please use a unique invoice number.';
+      }
+      return `Unique constraint failed: A record with this unique value (${targetStr}) already exists.`;
     }
     if (err.message.includes('Authentication failed against database server') || err.message.includes('provided database credentials')) {
       return 'Database Authentication Error: Invalid PostgreSQL credentials in backend .env file. Please check DATABASE_URL password.';
@@ -2266,7 +2277,11 @@ app.post('/api/billing/quotations', async (req, res) => {
     const total = Number(totalAmount) || 0;
     const gst = gstAmount !== undefined ? Number(gstAmount) : Math.round(total * 0.18);
     const grand = grandTotal !== undefined ? Number(grandTotal) : total + gst;
-    const qNo = quotationNumber ? quotationNumber.trim() : await generateNextQuotationNumber();
+    let qNo = quotationNumber ? quotationNumber.trim() : await generateNextQuotationNumber();
+    const existingQ = await prisma.quotation.findUnique({ where: { quotationNumber: qNo } });
+    if (existingQ) {
+      qNo = await generateNextQuotationNumber();
+    }
 
     const newQ = await prisma.quotation.create({
       data: {
@@ -2543,7 +2558,11 @@ app.post('/api/billing/invoices', async (req, res) => {
     } = req.body;
 
     const total = Number(totalAmount) || 0;
-    const invNo = invoiceNumber ? invoiceNumber.trim() : await generateNextInvoiceNumber();
+    let invNo = invoiceNumber ? invoiceNumber.trim() : await generateNextInvoiceNumber();
+    const existingInv = await prisma.invoice.findUnique({ where: { invoiceNumber: invNo } });
+    if (existingInv) {
+      invNo = await generateNextInvoiceNumber();
+    }
 
     const newInv = await prisma.invoice.create({
       data: {
