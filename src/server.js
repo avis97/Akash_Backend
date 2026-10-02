@@ -2541,24 +2541,6 @@ app.post('/api/billing/invoices', async (req, res) => {
     return res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
   }
 });
-        paidAmount: 0,
-        balanceAmount: total,
-        dueDate: dueDate ? new Date(dueDate) : new Date(Date.now() + 15 * 24 * 60 * 60 * 1000),
-        status: 'UNPAID',
-        itemsJson: JSON.stringify(items || [{ name: 'Equipment Supply & Setup', qty: 1, amount: total }])
-      }
-    });
-
-    if (items) {
-      await deductInventoryStockForItems(items, invNo, req.user?.name || 'Superadmin');
-    }
-
-    await logActivity('Billing Officer', `Issued Invoice #${newInv.invoiceNumber} to ${clientName} (₹${total}) and updated Inventory stock`, 'Billing & Invoicing');
-    return res.status(201).json({ success: true, data: newInv });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
-  }
-});
 
 app.put('/api/billing/invoices/:id', async (req, res) => {
   try {
