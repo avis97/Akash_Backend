@@ -58,6 +58,9 @@ async function logActivity(userName, action, module) {
 // Helper to format friendly DB connection & auth errors
 function formatDbErrorMessage(err) {
   if (err && err.message) {
+    if (err.code === 'P2002' || err.message.includes('Unique constraint failed')) {
+      return 'A product with this SKU / Code already exists. Please use a unique SKU code.';
+    }
     if (err.message.includes('Authentication failed against database server') || err.message.includes('provided database credentials')) {
       return 'Database Authentication Error: Invalid PostgreSQL credentials in backend .env file. Please check DATABASE_URL password.';
     }
@@ -2009,7 +2012,20 @@ app.post('/api/inventory', async (req, res) => {
       name, code, sku, salePrice, purchasePrice, tax, brand, category, unit, productImage, type, stockQuantity, description, minStockAlert, unitPrice 
     } = req.body;
 
-    const finalCode = (sku || code || '').trim() || `AE-${Math.floor(1000 + Math.random() * 9000)}`;
+    const baseCode = (sku || code || '').trim() || `AE-${Math.floor(1000 + Math.random() * 9000)}`;
+    let finalCode = baseCode;
+
+    // Check if code already exists in database; if so, generate a unique variant
+    let existingProd = await prisma.product.findUnique({ where: { code: finalCode } });
+    if (existingProd) {
+      let attempts = 0;
+      while (existingProd && attempts < 10) {
+        finalCode = `${baseCode}-${Math.floor(1000 + Math.random() * 9000)}`;
+        existingProd = await prisma.product.findUnique({ where: { code: finalCode } });
+        attempts++;
+      }
+    }
+
     const finalSalePrice = Number(salePrice !== undefined && salePrice !== '' ? salePrice : (unitPrice || 0));
     const finalPurchasePrice = Number(purchasePrice !== undefined && purchasePrice !== '' ? purchasePrice : 0);
     const finalQty = Number(stockQuantity !== undefined && stockQuantity !== '' ? stockQuantity : 0);
