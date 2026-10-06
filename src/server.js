@@ -2717,6 +2717,7 @@ app.post('/api/vendors', async (req, res) => {
     const {
       name,
       contact,
+      email,
       taxNumber,
       balance,
       billingName,
@@ -2725,7 +2726,14 @@ app.post('/api/vendors', async (req, res) => {
       city,
       state,
       country,
-      zipCode
+      zipCode,
+      shippingName,
+      shippingPhone,
+      shippingAddress,
+      shippingCity,
+      shippingState,
+      shippingCountry,
+      shippingZipCode
     } = req.body;
 
     if (!name || !contact) {
@@ -2736,6 +2744,7 @@ app.post('/api/vendors', async (req, res) => {
       data: {
         name,
         contact,
+        email: email || null,
         taxNumber: taxNumber || null,
         balance: balance !== undefined ? Number(balance) : 0,
         billingName: billingName || name,
@@ -2744,7 +2753,14 @@ app.post('/api/vendors', async (req, res) => {
         city: city || null,
         state: state || null,
         country: country || 'India',
-        zipCode: zipCode || null
+        zipCode: zipCode || null,
+        shippingName: shippingName || null,
+        shippingPhone: shippingPhone || null,
+        shippingAddress: shippingAddress || null,
+        shippingCity: shippingCity || null,
+        shippingState: shippingState || null,
+        shippingCountry: shippingCountry || 'India',
+        shippingZipCode: shippingZipCode || null
       }
     });
 
@@ -2761,6 +2777,7 @@ app.put('/api/vendors/:id', async (req, res) => {
     const {
       name,
       contact,
+      email,
       taxNumber,
       balance,
       billingName,
@@ -2769,7 +2786,14 @@ app.put('/api/vendors/:id', async (req, res) => {
       city,
       state,
       country,
-      zipCode
+      zipCode,
+      shippingName,
+      shippingPhone,
+      shippingAddress,
+      shippingCity,
+      shippingState,
+      shippingCountry,
+      shippingZipCode
     } = req.body;
 
     const existing = await prisma.vendor.findUnique({ where: { id } });
@@ -2780,6 +2804,7 @@ app.put('/api/vendors/:id', async (req, res) => {
       data: {
         ...(name && { name }),
         ...(contact && { contact }),
+        ...(email !== undefined && { email }),
         ...(taxNumber !== undefined && { taxNumber }),
         ...(balance !== undefined && { balance: Number(balance) }),
         ...(billingName !== undefined && { billingName }),
@@ -2788,7 +2813,14 @@ app.put('/api/vendors/:id', async (req, res) => {
         ...(city !== undefined && { city }),
         ...(state !== undefined && { state }),
         ...(country !== undefined && { country }),
-        ...(zipCode !== undefined && { zipCode })
+        ...(zipCode !== undefined && { zipCode }),
+        ...(shippingName !== undefined && { shippingName }),
+        ...(shippingPhone !== undefined && { shippingPhone }),
+        ...(shippingAddress !== undefined && { shippingAddress }),
+        ...(shippingCity !== undefined && { shippingCity }),
+        ...(shippingState !== undefined && { shippingState }),
+        ...(shippingCountry !== undefined && { shippingCountry }),
+        ...(shippingZipCode !== undefined && { shippingZipCode })
       }
     });
 

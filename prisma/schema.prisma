@@ -494,22 +494,35 @@ model Project {
 }
 
 model Vendor {
-  id           String       @id @default(uuid())
-  name         String
-  contact      String
-  taxNumber    String?
-  balance      Float        @default(0)
-  billingName  String?
-  billingPhone String?
-  address      String?
-  city         String?
-  state        String?
-  country      String?      @default("India")
-  zipCode      String?
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
+  id              String       @id @default(uuid())
+  name            String
+  contact         String
+  email           String?
+  taxNumber       String?
+  balance         Float        @default(0)
 
-  bills        VendorBill[]
+  // Billing Address
+  billingName     String?
+  billingPhone    String?
+  address         String?
+  city            String?
+  state           String?
+  country         String?      @default("India")
+  zipCode         String?
+
+  // Shipping Address
+  shippingName    String?
+  shippingPhone   String?
+  shippingAddress String?
+  shippingCity    String?
+  shippingState   String?
+  shippingCountry String?      @default("India")
+  shippingZipCode String?
+
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  bills           VendorBill[]
 }
 
 model VendorBill {
