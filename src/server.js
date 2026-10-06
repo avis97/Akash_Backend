@@ -99,6 +99,332 @@ app.get('/api/health', (req, res) => {
 });
 
 // ----------------------------------------------------
+// Master Data Auto-Seeder & APIs (Categories, Brands, Units, Taxes, Departments, Branches)
+// ----------------------------------------------------
+async function seedMasterData() {
+  try {
+    const catCount = await prisma.productCategory.count();
+    if (catCount === 0) {
+      const defaultCats = [
+        'Networking Equipment', 'AMPERE METER', 'CCTV & Security Hardware',
+        'Electrical Supplies', 'IT Infrastructure', 'General Support Service'
+      ];
+      for (const name of defaultCats) {
+        await prisma.productCategory.create({ data: { name } });
+      }
+    }
+
+    const brandCount = await prisma.productBrand.count();
+    if (brandCount === 0) {
+      const defaultBrands = ['KARTAR', 'Cisco', 'D-Link', 'Schneider', 'Havells', 'General'];
+      for (const name of defaultBrands) {
+        await prisma.productBrand.create({ data: { name } });
+      }
+    }
+
+    const unitCount = await prisma.productUnit.count();
+    if (unitCount === 0) {
+      const defaultUnits = ['Pics', 'Pcs', 'Boxes', 'Meters', 'Kg', 'Sets'];
+      for (const name of defaultUnits) {
+        await prisma.productUnit.create({ data: { name } });
+      }
+    }
+
+    const taxCount = await prisma.taxRate.count();
+    if (taxCount === 0) {
+      const defaultTaxes = [
+        { name: '18% GST', rate: 18 },
+        { name: '12% GST', rate: 12 },
+        { name: '5% GST', rate: 5 },
+        { name: '0% GST (Exempt)', rate: 0 }
+      ];
+      for (const tax of defaultTaxes) {
+        await prisma.taxRate.create({ data: tax });
+      }
+    }
+
+    const deptCount = await prisma.department.count();
+    if (deptCount === 0) {
+      const defaultDepts = [
+        'Field Engineering & Support', 'IT & Network Operations', 'HVAC & Facilities',
+        'Electrical & Automation', 'General Maintenance', 'Quality Audit'
+      ];
+      for (const name of defaultDepts) {
+        await prisma.department.create({ data: { name } });
+      }
+    }
+
+    const branchCount = await prisma.branch.count();
+    if (branchCount === 0) {
+      const defaultBranches = [
+        { name: 'Headquarters - Kolkata', code: 'BR-KOL-01', address: 'Salt Lake Sector V, Kolkata' },
+        { name: 'Salt Lake Sector V', code: 'BR-KOL-02', address: 'Block EP & GP, Kolkata' },
+        { name: 'Howrah Sub-Office', code: 'BR-HWR-01', address: 'G.T. Road, Howrah' },
+        { name: 'Siliguri Regional Branch', code: 'BR-SLG-01', address: 'Hill Cart Road, Siliguri' }
+      ];
+      for (const branch of defaultBranches) {
+        await prisma.branch.create({ data: branch });
+      }
+    }
+  } catch (err) {
+    console.error('Error seeding master data:', err.message);
+  }
+}
+seedMasterData();
+
+// GET all master data at once
+app.get('/api/master-data', async (req, res) => {
+  try {
+    const [categories, brands, units, taxes, departments, branches] = await Promise.all([
+      prisma.productCategory.findMany({ orderBy: { name: 'asc' } }),
+      prisma.productBrand.findMany({ orderBy: { name: 'asc' } }),
+      prisma.productUnit.findMany({ orderBy: { name: 'asc' } }),
+      prisma.taxRate.findMany({ orderBy: { rate: 'desc' } }),
+      prisma.department.findMany({ orderBy: { name: 'asc' } }),
+      prisma.branch.findMany({ orderBy: { name: 'asc' } })
+    ]);
+    res.json({
+      success: true,
+      data: { categories, brands, units, taxes, departments, branches }
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
+  }
+});
+
+// Categories CRUD
+app.get('/api/categories', async (req, res) => {
+  try {
+    const data = await prisma.productCategory.findMany({ orderBy: { name: 'asc' } });
+    res.json({ success: true, data });
+  } catch (err) { res.status(500).json({ success: false, message: formatDbErrorMessage(err) }); }
+});
+
+app.post('/api/categories', async (req, res) => {
+  try {
+    const { name, code } = req.body;
+    if (!name || !name.trim()) return res.status(400).json({ success: false, message: 'Category Name is required' });
+    const newCat = await prisma.productCategory.create({ data: { name: name.trim(), code: code?.trim() || null } });
+    await logActivity('Admin', `Created Category: ${newCat.name}`, 'Master Data');
+    res.json({ success: true, data: newCat });
+  } catch (err) { res.status(500).json({ success: false, message: formatDbErrorMessage(err) }); }
+});
+
+app.put('/api/categories/:id', async (req, res) => {
+  try {
+    const { name, code } = req.body;
+    const updated = await prisma.productCategory.update({
+      where: { id: req.params.id },
+      data: { name: name.trim(), code: code?.trim() || null }
+    });
+    await logActivity('Admin', `Updated Category: ${updated.name}`, 'Master Data');
+    res.json({ success: true, data: updated });
+  } catch (err) { res.status(500).json({ success: false, message: formatDbErrorMessage(err) }); }
+});
+
+app.delete('/api/categories/:id', async (req, res) => {
+  try {
+    const deleted = await prisma.productCategory.delete({ where: { id: req.params.id } });
+    await logActivity('Admin', `Deleted Category: ${deleted.name}`, 'Master Data');
+    res.json({ success: true, data: deleted });
+  } catch (err) { res.status(500).json({ success: false, message: formatDbErrorMessage(err) }); }
+});
+
+// Brands CRUD
+app.get('/api/brands', async (req, res) => {
+  try {
+    const data = await prisma.productBrand.findMany({ orderBy: { name: 'asc' } });
+    res.json({ success: true, data });
+  } catch (err) { res.status(500).json({ success: false, message: formatDbErrorMessage(err) }); }
+});
+
+app.post('/api/brands', async (req, res) => {
+  try {
+    const { name } = req.body;
+    if (!name || !name.trim()) return res.status(400).json({ success: false, message: 'Brand Name is required' });
+    const newBrand = await prisma.productBrand.create({ data: { name: name.trim() } });
+    await logActivity('Admin', `Created Brand: ${newBrand.name}`, 'Master Data');
+    res.json({ success: true, data: newBrand });
+  } catch (err) { res.status(500).json({ success: false, message: formatDbErrorMessage(err) }); }
+});
+
+app.put('/api/brands/:id', async (req, res) => {
+  try {
+    const { name } = req.body;
+    const updated = await prisma.productBrand.update({
+      where: { id: req.params.id },
+      data: { name: name.trim() }
+    });
+    await logActivity('Admin', `Updated Brand: ${updated.name}`, 'Master Data');
+    res.json({ success: true, data: updated });
+  } catch (err) { res.status(500).json({ success: false, message: formatDbErrorMessage(err) }); }
+});
+
+app.delete('/api/brands/:id', async (req, res) => {
+  try {
+    const deleted = await prisma.productBrand.delete({ where: { id: req.params.id } });
+    await logActivity('Admin', `Deleted Brand: ${deleted.name}`, 'Master Data');
+    res.json({ success: true, data: deleted });
+  } catch (err) { res.status(500).json({ success: false, message: formatDbErrorMessage(err) }); }
+});
+
+// Units CRUD
+app.get('/api/units', async (req, res) => {
+  try {
+    const data = await prisma.productUnit.findMany({ orderBy: { name: 'asc' } });
+    res.json({ success: true, data });
+  } catch (err) { res.status(500).json({ success: false, message: formatDbErrorMessage(err) }); }
+});
+
+app.post('/api/units', async (req, res) => {
+  try {
+    const { name } = req.body;
+    if (!name || !name.trim()) return res.status(400).json({ success: false, message: 'Unit Name is required' });
+    const newUnit = await prisma.productUnit.create({ data: { name: name.trim() } });
+    await logActivity('Admin', `Created Unit: ${newUnit.name}`, 'Master Data');
+    res.json({ success: true, data: newUnit });
+  } catch (err) { res.status(500).json({ success: false, message: formatDbErrorMessage(err) }); }
+});
+
+app.put('/api/units/:id', async (req, res) => {
+  try {
+    const { name } = req.body;
+    const updated = await prisma.productUnit.update({
+      where: { id: req.params.id },
+      data: { name: name.trim() }
+    });
+    await logActivity('Admin', `Updated Unit: ${updated.name}`, 'Master Data');
+    res.json({ success: true, data: updated });
+  } catch (err) { res.status(500).json({ success: false, message: formatDbErrorMessage(err) }); }
+});
+
+app.delete('/api/units/:id', async (req, res) => {
+  try {
+    const deleted = await prisma.productUnit.delete({ where: { id: req.params.id } });
+    await logActivity('Admin', `Deleted Unit: ${deleted.name}`, 'Master Data');
+    res.json({ success: true, data: deleted });
+  } catch (err) { res.status(500).json({ success: false, message: formatDbErrorMessage(err) }); }
+});
+
+// Taxes CRUD
+app.get('/api/taxes', async (req, res) => {
+  try {
+    const data = await prisma.taxRate.findMany({ orderBy: { rate: 'desc' } });
+    res.json({ success: true, data });
+  } catch (err) { res.status(500).json({ success: false, message: formatDbErrorMessage(err) }); }
+});
+
+app.post('/api/taxes', async (req, res) => {
+  try {
+    const { name, rate } = req.body;
+    if (!name || !name.trim()) return res.status(400).json({ success: false, message: 'Tax Name is required' });
+    const newTax = await prisma.taxRate.create({
+      data: { name: name.trim(), rate: Number(rate) || 0 }
+    });
+    await logActivity('Admin', `Created Tax: ${newTax.name}`, 'Master Data');
+    res.json({ success: true, data: newTax });
+  } catch (err) { res.status(500).json({ success: false, message: formatDbErrorMessage(err) }); }
+});
+
+app.put('/api/taxes/:id', async (req, res) => {
+  try {
+    const { name, rate } = req.body;
+    const updated = await prisma.taxRate.update({
+      where: { id: req.params.id },
+      data: { name: name.trim(), rate: Number(rate) || 0 }
+    });
+    await logActivity('Admin', `Updated Tax: ${updated.name}`, 'Master Data');
+    res.json({ success: true, data: updated });
+  } catch (err) { res.status(500).json({ success: false, message: formatDbErrorMessage(err) }); }
+});
+
+app.delete('/api/taxes/:id', async (req, res) => {
+  try {
+    const deleted = await prisma.taxRate.delete({ where: { id: req.params.id } });
+    await logActivity('Admin', `Deleted Tax: ${deleted.name}`, 'Master Data');
+    res.json({ success: true, data: deleted });
+  } catch (err) { res.status(500).json({ success: false, message: formatDbErrorMessage(err) }); }
+});
+
+// Departments CRUD
+app.get('/api/departments', async (req, res) => {
+  try {
+    const data = await prisma.department.findMany({ orderBy: { name: 'asc' } });
+    res.json({ success: true, data });
+  } catch (err) { res.status(500).json({ success: false, message: formatDbErrorMessage(err) }); }
+});
+
+app.post('/api/departments', async (req, res) => {
+  try {
+    const { name } = req.body;
+    if (!name || !name.trim()) return res.status(400).json({ success: false, message: 'Department Name is required' });
+    const newDept = await prisma.department.create({ data: { name: name.trim() } });
+    await logActivity('Admin', `Created Department: ${newDept.name}`, 'Master Data');
+    res.json({ success: true, data: newDept });
+  } catch (err) { res.status(500).json({ success: false, message: formatDbErrorMessage(err) }); }
+});
+
+app.put('/api/departments/:id', async (req, res) => {
+  try {
+    const { name } = req.body;
+    const updated = await prisma.department.update({
+      where: { id: req.params.id },
+      data: { name: name.trim() }
+    });
+    await logActivity('Admin', `Updated Department: ${updated.name}`, 'Master Data');
+    res.json({ success: true, data: updated });
+  } catch (err) { res.status(500).json({ success: false, message: formatDbErrorMessage(err) }); }
+});
+
+app.delete('/api/departments/:id', async (req, res) => {
+  try {
+    const deleted = await prisma.department.delete({ where: { id: req.params.id } });
+    await logActivity('Admin', `Deleted Department: ${deleted.name}`, 'Master Data');
+    res.json({ success: true, data: deleted });
+  } catch (err) { res.status(500).json({ success: false, message: formatDbErrorMessage(err) }); }
+});
+
+// Branches CRUD
+app.get('/api/branches', async (req, res) => {
+  try {
+    const data = await prisma.branch.findMany({ orderBy: { name: 'asc' } });
+    res.json({ success: true, data });
+  } catch (err) { res.status(500).json({ success: false, message: formatDbErrorMessage(err) }); }
+});
+
+app.post('/api/branches', async (req, res) => {
+  try {
+    const { name, code, address } = req.body;
+    if (!name || !name.trim()) return res.status(400).json({ success: false, message: 'Branch Name is required' });
+    const newBranch = await prisma.branch.create({
+      data: { name: name.trim(), code: code?.trim() || null, address: address?.trim() || null }
+    });
+    await logActivity('Admin', `Created Branch: ${newBranch.name}`, 'Master Data');
+    res.json({ success: true, data: newBranch });
+  } catch (err) { res.status(500).json({ success: false, message: formatDbErrorMessage(err) }); }
+});
+
+app.put('/api/branches/:id', async (req, res) => {
+  try {
+    const { name, code, address } = req.body;
+    const updated = await prisma.branch.update({
+      where: { id: req.params.id },
+      data: { name: name.trim(), code: code?.trim() || null, address: address?.trim() || null }
+    });
+    await logActivity('Admin', `Updated Branch: ${updated.name}`, 'Master Data');
+    res.json({ success: true, data: updated });
+  } catch (err) { res.status(500).json({ success: false, message: formatDbErrorMessage(err) }); }
+});
+
+app.delete('/api/branches/:id', async (req, res) => {
+  try {
+    const deleted = await prisma.branch.delete({ where: { id: req.params.id } });
+    await logActivity('Admin', `Deleted Branch: ${deleted.name}`, 'Master Data');
+    res.json({ success: true, data: deleted });
+  } catch (err) { res.status(500).json({ success: false, message: formatDbErrorMessage(err) }); }
+});
+
+// ----------------------------------------------------
 // 0. Authentication API (Role-based Login & Token Verification)
 // ----------------------------------------------------
 app.post('/api/auth/login', async (req, res) => {
