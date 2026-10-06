@@ -358,8 +358,134 @@ async function main() {
     console.log('✅ Projects seeded into database');
   }
 
+  // 12. Vendors & Bills
+  const sampleVendors = [
+    {
+      id: 'ven-101',
+      name: 'vs digitech',
+      contact: '+919123316206',
+      taxNumber: '19AABCC1234F1ZB',
+      balance: 8850,
+      billingName: 'vs digitech',
+      billingPhone: '9123316206',
+      address: 'AG - 104, Baisakhi New Market, F-21, 1st Floor, Sector III',
+      city: 'Kolkata',
+      state: 'West Bengal',
+      country: 'India',
+      zipCode: '700091'
+    },
+    {
+      id: 'ven-102',
+      name: 'CyberTech Infra Solutions',
+      contact: '+919830012345',
+      taxNumber: '19AAACC5678K1ZH',
+      balance: 50000,
+      billingName: 'CyberTech Infra',
+      billingPhone: '9830012345',
+      address: 'Plot 45, Salt Lake Sector V',
+      city: 'Kolkata',
+      state: 'West Bengal',
+      country: 'India',
+      zipCode: '700091'
+    },
+    {
+      id: 'ven-103',
+      name: 'Apex Electrical Components',
+      contact: '+919874563210',
+      taxNumber: '19BBBCC9988L1Z3',
+      balance: 20000,
+      billingName: 'Apex Electricals',
+      billingPhone: '9874563210',
+      address: '88 MG Road, Burrabazar',
+      city: 'Kolkata',
+      state: 'West Bengal',
+      country: 'India',
+      zipCode: '700007'
+    }
+  ];
+
+  for (const v of sampleVendors) {
+    await prisma.vendor.upsert({
+      where: { id: v.id },
+      update: {
+        name: v.name,
+        contact: v.contact,
+        taxNumber: v.taxNumber,
+        balance: v.balance,
+        billingName: v.billingName,
+        billingPhone: v.billingPhone,
+        address: v.address,
+        city: v.city,
+        state: v.state,
+        country: v.country,
+        zipCode: v.zipCode
+      },
+      create: v
+    });
+  }
+  console.log('✅ Vendors seeded into database');
+
+  const sampleBills = [
+    {
+      id: 'bill-501',
+      billNumber: 'BILL/2026/001',
+      vendorId: 'ven-101',
+      vendorName: 'vs digitech',
+      vendorGst: '19AABCC1234F1ZB',
+      invoiceNo: 'INV-VS-889',
+      category: 'CCTV & Security Hardware',
+      totalAmount: 8850,
+      gstAmount: 1350,
+      paidAmount: 0,
+      balanceAmount: 8850,
+      dueDate: new Date(Date.now() + 15 * 86400000),
+      status: 'UNPAID',
+      itemsJson: JSON.stringify([
+        { item: '4MP IP Dome Camera', qty: 2, rate: 3500, amount: 7000 },
+        { item: 'Cat6 Cable Roll (100m)', qty: 1, rate: 1500, amount: 1500 }
+      ]),
+      notes: 'Payment due within 15 days of invoice date.'
+    },
+    {
+      id: 'bill-502',
+      billNumber: 'BILL/2026/002',
+      vendorId: 'ven-102',
+      vendorName: 'CyberTech Infra Solutions',
+      vendorGst: '19AAACC5678K1ZH',
+      invoiceNo: 'CT-2026-94',
+      category: 'Networking Equipment',
+      totalAmount: 50000,
+      gstAmount: 7627,
+      paidAmount: 20000,
+      balanceAmount: 30000,
+      dueDate: new Date(Date.now() + 7 * 86400000),
+      status: 'PARTIAL',
+      itemsJson: JSON.stringify([
+        { item: 'Managed 24-Port Gigabit Switch', qty: 2, rate: 20000, amount: 40000 },
+        { item: 'SFP Transceiver 10G', qty: 2, rate: 5000, amount: 10000 }
+      ]),
+      notes: 'Partially settled via bank transfer.'
+    }
+  ];
+
+  for (const b of sampleBills) {
+    await prisma.vendorBill.upsert({
+      where: { billNumber: b.billNumber },
+      update: {
+        vendorName: b.vendorName,
+        totalAmount: b.totalAmount,
+        paidAmount: b.paidAmount,
+        balanceAmount: b.balanceAmount,
+        status: b.status
+      },
+      create: b
+    });
+  }
+  console.log('✅ Vendor Bills seeded into database');
+
   console.log('🎉 Full Akash CRM Database Seeding completed successfully!');
 }
+
 
 main()
   .catch((e) => {

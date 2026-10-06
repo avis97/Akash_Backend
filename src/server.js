@@ -2684,7 +2684,289 @@ app.post('/api/purchases', async (req, res) => {
 });
 
 // ----------------------------------------------------
+// 8.1 Vendors Module API (Database)
+// ----------------------------------------------------
+app.get('/api/vendors', async (req, res) => {
+  try {
+    const vendors = await prisma.vendor.findMany({
+      include: { bills: true },
+      orderBy: { createdAt: 'desc' }
+    });
+    return res.json({ success: true, data: vendors });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
+  }
+});
+
+app.get('/api/vendors/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const vendor = await prisma.vendor.findUnique({
+      where: { id },
+      include: { bills: true }
+    });
+    if (!vendor) return res.status(404).json({ success: false, message: 'Vendor not found' });
+    return res.json({ success: true, data: vendor });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
+  }
+});
+
+app.post('/api/vendors', async (req, res) => {
+  try {
+    const {
+      name,
+      contact,
+      taxNumber,
+      balance,
+      billingName,
+      billingPhone,
+      address,
+      city,
+      state,
+      country,
+      zipCode
+    } = req.body;
+
+    if (!name || !contact) {
+      return res.status(400).json({ success: false, message: 'Vendor Name and Contact are required' });
+    }
+
+    const newVendor = await prisma.vendor.create({
+      data: {
+        name,
+        contact,
+        taxNumber: taxNumber || null,
+        balance: balance !== undefined ? Number(balance) : 0,
+        billingName: billingName || name,
+        billingPhone: billingPhone || contact,
+        address: address || null,
+        city: city || null,
+        state: state || null,
+        country: country || 'India',
+        zipCode: zipCode || null
+      }
+    });
+
+    await logActivity('Vendor Admin', `Created new Vendor "${newVendor.name}"`, 'Purchase Module');
+    return res.status(201).json({ success: true, data: newVendor });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
+  }
+});
+
+app.put('/api/vendors/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      name,
+      contact,
+      taxNumber,
+      balance,
+      billingName,
+      billingPhone,
+      address,
+      city,
+      state,
+      country,
+      zipCode
+    } = req.body;
+
+    const existing = await prisma.vendor.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ success: false, message: 'Vendor not found' });
+
+    const updated = await prisma.vendor.update({
+      where: { id },
+      data: {
+        ...(name && { name }),
+        ...(contact && { contact }),
+        ...(taxNumber !== undefined && { taxNumber }),
+        ...(balance !== undefined && { balance: Number(balance) }),
+        ...(billingName !== undefined && { billingName }),
+        ...(billingPhone !== undefined && { billingPhone }),
+        ...(address !== undefined && { address }),
+        ...(city !== undefined && { city }),
+        ...(state !== undefined && { state }),
+        ...(country !== undefined && { country }),
+        ...(zipCode !== undefined && { zipCode })
+      }
+    });
+
+    await logActivity('Vendor Admin', `Updated Vendor details for "${updated.name}"`, 'Purchase Module');
+    return res.json({ success: true, data: updated });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
+  }
+});
+
+app.delete('/api/vendors/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const existing = await prisma.vendor.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ success: false, message: 'Vendor not found' });
+
+    await prisma.vendor.delete({ where: { id } });
+    await logActivity('Vendor Admin', `Deleted Vendor "${existing.name}"`, 'Purchase Module');
+    return res.json({ success: true, message: 'Vendor deleted successfully' });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
+  }
+});
+
+// ----------------------------------------------------
+// 8.2 Vendor Bills Module API (Database)
+// ----------------------------------------------------
+app.get(['/api/bills', '/api/vendor-bills'], async (req, res) => {
+  try {
+    const bills = await prisma.vendorBill.findMany({
+      include: { vendor: true },
+      orderBy: { createdAt: 'desc' }
+    });
+    return res.json({ success: true, data: bills });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
+  }
+});
+
+app.post(['/api/bills', '/api/vendor-bills'], async (req, res) => {
+  try {
+    const {
+      vendorId,
+      vendorName,
+      vendorGst,
+      invoiceNo,
+      category,
+      totalAmount,
+      gstAmount,
+      paidAmount,
+      dueDate,
+      status,
+      items,
+      notes
+    } = req.body;
+
+    const total = Number(totalAmount) || 0;
+    const paid = Number(paidAmount) || 0;
+    const gst = gstAmount !== undefined ? Number(gstAmount) : Math.round(total * 0.18);
+    const balance = Math.max(0, total - paid);
+
+    let calcStatus = status;
+    if (!calcStatus) {
+      if (paid >= total && total > 0) calcStatus = 'PAID';
+      else if (paid > 0) calcStatus = 'PARTIAL';
+      else calcStatus = 'UNPAID';
+    }
+
+    const count = await prisma.vendorBill.count();
+    const billNumber = `BILL/2026/${String(count + 1).padStart(3, '0')}`;
+
+    const newBill = await prisma.vendorBill.create({
+      data: {
+        billNumber,
+        vendorId: vendorId || null,
+        vendorName: vendorName || 'Unknown Vendor',
+        vendorGst: vendorGst || null,
+        invoiceNo: invoiceNo || `INV-${Date.now().toString().slice(-4)}`,
+        category: category || 'General Purchase',
+        totalAmount: total,
+        gstAmount: gst,
+        paidAmount: paid,
+        balanceAmount: balance,
+        dueDate: dueDate ? new Date(dueDate) : new Date(Date.now() + 15 * 86400000),
+        status: calcStatus,
+        itemsJson: JSON.stringify(items || []),
+        notes: notes || null
+      }
+    });
+
+    // Optionally update vendor balance if vendorId is linked
+    if (vendorId && balance > 0) {
+      await prisma.vendor.update({
+        where: { id: vendorId },
+        data: { balance: { increment: balance } }
+      }).catch(() => {});
+    }
+
+    await logActivity('Purchase Admin', `Generated Purchase Bill ${newBill.billNumber} for ${newBill.vendorName}`, 'Purchase Module');
+    return res.status(201).json({ success: true, data: newBill });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
+  }
+});
+
+app.put(['/api/bills/:id', '/api/vendor-bills/:id'], async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      vendorName,
+      vendorGst,
+      invoiceNo,
+      category,
+      totalAmount,
+      gstAmount,
+      paidAmount,
+      dueDate,
+      status,
+      items,
+      notes
+    } = req.body;
+
+    const existing = await prisma.vendorBill.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ success: false, message: 'Purchase bill not found' });
+
+    const total = totalAmount !== undefined ? Number(totalAmount) : existing.totalAmount;
+    const paid = paidAmount !== undefined ? Number(paidAmount) : existing.paidAmount;
+    const balance = Math.max(0, total - paid);
+
+    let calcStatus = status;
+    if (!calcStatus) {
+      if (paid >= total && total > 0) calcStatus = 'PAID';
+      else if (paid > 0) calcStatus = 'PARTIAL';
+      else calcStatus = 'UNPAID';
+    }
+
+    const updated = await prisma.vendorBill.update({
+      where: { id },
+      data: {
+        ...(vendorName && { vendorName }),
+        ...(vendorGst !== undefined && { vendorGst }),
+        ...(invoiceNo && { invoiceNo }),
+        ...(category && { category }),
+        totalAmount: total,
+        ...(gstAmount !== undefined && { gstAmount: Number(gstAmount) }),
+        paidAmount: paid,
+        balanceAmount: balance,
+        ...(dueDate && { dueDate: new Date(dueDate) }),
+        status: calcStatus,
+        ...(items && { itemsJson: JSON.stringify(items) }),
+        ...(notes !== undefined && { notes })
+      }
+    });
+
+    await logActivity('Purchase Admin', `Updated Purchase Bill ${updated.billNumber}`, 'Purchase Module');
+    return res.json({ success: true, data: updated });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
+  }
+});
+
+app.delete(['/api/bills/:id', '/api/vendor-bills/:id'], async (req, res) => {
+  try {
+    const { id } = req.params;
+    const existing = await prisma.vendorBill.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ success: false, message: 'Purchase bill not found' });
+
+    await prisma.vendorBill.delete({ where: { id } });
+    await logActivity('Purchase Admin', `Deleted Purchase Bill ${existing.billNumber}`, 'Purchase Module');
+    return res.json({ success: true, message: 'Purchase bill deleted successfully' });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
+  }
+});
+
+// ----------------------------------------------------
 // 9. Voucher Entry Module (Database)
+
 // ----------------------------------------------------
 app.get('/api/vouchers', async (req, res) => {
   try {
