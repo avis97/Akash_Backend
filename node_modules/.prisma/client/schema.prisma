@@ -533,11 +533,13 @@ model VendorBill {
   vendorName    String
   vendorGst     String?
   invoiceNo     String?
+  orderNumber   String?
   category      String?   @default("Networking Equipment")
   totalAmount   Float     @default(0)
   gstAmount     Float     @default(0)
   paidAmount    Float     @default(0)
   balanceAmount Float     @default(0)
+  billDate      DateTime? @default(now())
   dueDate       DateTime?
   status        String    @default("UNPAID") // UNPAID, PARTIAL, PAID, OVERDUE
   itemsJson     String?

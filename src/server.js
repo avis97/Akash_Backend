@@ -2863,14 +2863,17 @@ app.get(['/api/bills', '/api/vendor-bills'], async (req, res) => {
 app.post(['/api/bills', '/api/vendor-bills'], async (req, res) => {
   try {
     const {
+      billNumber: customBillNum,
       vendorId,
       vendorName,
       vendorGst,
       invoiceNo,
+      orderNumber,
       category,
       totalAmount,
       gstAmount,
       paidAmount,
+      billDate,
       dueDate,
       status,
       items,
@@ -2890,7 +2893,7 @@ app.post(['/api/bills', '/api/vendor-bills'], async (req, res) => {
     }
 
     const count = await prisma.vendorBill.count();
-    const billNumber = `BILL/2026/${String(count + 1).padStart(3, '0')}`;
+    const billNumber = customBillNum || `#BILL${String(count + 1).padStart(5, '0')}`;
 
     const newBill = await prisma.vendorBill.create({
       data: {
@@ -2899,11 +2902,13 @@ app.post(['/api/bills', '/api/vendor-bills'], async (req, res) => {
         vendorName: vendorName || 'Unknown Vendor',
         vendorGst: vendorGst || null,
         invoiceNo: invoiceNo || `INV-${Date.now().toString().slice(-4)}`,
+        orderNumber: orderNumber || null,
         category: category || 'General Purchase',
         totalAmount: total,
         gstAmount: gst,
         paidAmount: paid,
         balanceAmount: balance,
+        billDate: billDate ? new Date(billDate) : new Date(),
         dueDate: dueDate ? new Date(dueDate) : new Date(Date.now() + 15 * 86400000),
         status: calcStatus,
         itemsJson: JSON.stringify(items || []),
@@ -2911,12 +2916,85 @@ app.post(['/api/bills', '/api/vendor-bills'], async (req, res) => {
       }
     });
 
-    // Optionally update vendor balance if vendorId is linked
+    // Update vendor balance if vendorId is linked
     if (vendorId && balance > 0) {
       await prisma.vendor.update({
         where: { id: vendorId },
         data: { balance: { increment: balance } }
       }).catch(() => {});
+    }
+
+    // Auto-update Product Stock Quantities & Log Inventory INFLOW Transactions
+    if (Array.isArray(items)) {
+      for (const item of items) {
+        const qty = Number(item.qty) || 0;
+        if (qty <= 0) continue;
+
+        let targetProduct = null;
+        if (item.productId) {
+          targetProduct = await prisma.product.findUnique({ where: { id: item.productId } }).catch(() => null);
+        }
+        if (!targetProduct && item.item) {
+          targetProduct = await prisma.product.findFirst({
+            where: {
+              OR: [
+                { name: { equals: item.item, mode: 'insensitive' } },
+                { code: { equals: item.code || item.item, mode: 'insensitive' } }
+              ]
+            }
+          }).catch(() => null);
+        }
+
+        if (targetProduct) {
+          // Increment existing product stock in inventory
+          await prisma.product.update({
+            where: { id: targetProduct.id },
+            data: { stockQuantity: { increment: qty } }
+          }).catch(() => {});
+
+          await prisma.inventoryTransaction.create({
+            data: {
+              productId: targetProduct.id,
+              type: 'INFLOW',
+              quantity: qty,
+              referenceNo: newBill.billNumber,
+              notes: `Stock auto-incremented via Purchase Bill ${newBill.billNumber} from ${vendorName || 'Vendor'}`,
+              performedBy: 'Vendor Purchase'
+            }
+          }).catch(() => {});
+        } else if (item.item && (item.isNewProduct || item.addToInventory)) {
+          // Create new product entry in Inventory
+          const prodCode = item.code || `PRD-${Math.floor(1000 + Math.random() * 9000)}`;
+          const newProd = await prisma.product.create({
+            data: {
+              code: prodCode,
+              name: item.item,
+              category: category || 'General Purchase',
+              brand: vendorName || 'General',
+              stockQuantity: qty,
+              unit: item.unit || 'Pcs',
+              purchasePrice: Number(item.rate) || 0,
+              unitPrice: Number(item.rate) || 0,
+              salePrice: Number(item.rate) ? Number(item.rate) * 1.2 : 0,
+              type: 'Product',
+              minStockAlert: 10
+            }
+          }).catch(() => null);
+
+          if (newProd) {
+            await prisma.inventoryTransaction.create({
+              data: {
+                productId: newProd.id,
+                type: 'INFLOW',
+                quantity: qty,
+                referenceNo: newBill.billNumber,
+                notes: `New Product created & initial stock added via Purchase Bill ${newBill.billNumber}`,
+                performedBy: 'Vendor Purchase'
+              }
+            }).catch(() => {});
+          }
+        }
+      }
     }
 
     await logActivity('Purchase Admin', `Generated Purchase Bill ${newBill.billNumber} for ${newBill.vendorName}`, 'Purchase Module');
