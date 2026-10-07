@@ -175,22 +175,25 @@ seedMasterData();
 // GET all master data at once
 app.get('/api/master-data', async (req, res) => {
   try {
-    const [categories, brands, units, taxes, departments, branches] = await Promise.all([
+    const [categories, brands, units, taxes, departments, branches, trainingTypes, trainers] = await Promise.all([
       prisma.productCategory.findMany({ orderBy: { name: 'asc' } }),
       prisma.productBrand.findMany({ orderBy: { name: 'asc' } }),
       prisma.productUnit.findMany({ orderBy: { name: 'asc' } }),
       prisma.taxRate.findMany({ orderBy: { rate: 'desc' } }),
       prisma.department.findMany({ orderBy: { name: 'asc' } }),
-      prisma.branch.findMany({ orderBy: { name: 'asc' } })
+      prisma.branch.findMany({ orderBy: { name: 'asc' } }),
+      prisma.trainingType.findMany({ orderBy: { name: 'asc' } }),
+      prisma.trainer.findMany({ orderBy: { name: 'asc' } })
     ]);
     res.json({
       success: true,
-      data: { categories, brands, units, taxes, departments, branches }
+      data: { categories, brands, units, taxes, departments, branches, trainingTypes, trainers }
     });
   } catch (err) {
     res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
   }
 });
+
 
 // Categories CRUD
 app.get('/api/categories', async (req, res) => {
@@ -4508,6 +4511,377 @@ app.delete('/api/tracking/locations/:id', async (req, res) => {
     return res.status(500).json({ success: false, message: err.message });
   }
 });
+
+// ----------------------------------------------------
+// Employee Training & Development APIs
+// ----------------------------------------------------
+
+async function seedTrainingMasterData() {
+  try {
+    const typeCount = await prisma.trainingType.count();
+    if (typeCount === 0) {
+      const defaultTypes = ['Job Training', 'Onboarding Training', 'Technical Skills', 'Safety & Compliance', 'Leadership Development', 'Customer Service'];
+      for (const name of defaultTypes) {
+        await prisma.trainingType.create({ data: { name } });
+      }
+    }
+
+    const trainerCount = await prisma.trainer.count();
+    if (trainerCount === 0) {
+      const defaultTrainers = [
+        { name: 'Alok Naiya', type: 'Internal', email: 'alok@vsdorigtech.com' },
+        { name: 'M. Sen', type: 'Internal', email: 'm.sen@vsdorigtech.com' },
+        { name: 'Dr. R. K. Sharma', type: 'External', email: 'rk.sharma@training.org' }
+      ];
+      for (const t of defaultTrainers) {
+        await prisma.trainer.create({ data: t });
+      }
+    }
+  } catch (err) {
+    console.error('Error seeding training master data:', err.message);
+  }
+}
+seedTrainingMasterData();
+
+// GET Training Types
+app.get('/api/training-types', async (req, res) => {
+  try {
+    const data = await prisma.trainingType.findMany({ orderBy: { name: 'asc' } });
+    return res.json({ success: true, data });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
+  }
+});
+
+// POST Training Type
+app.post('/api/training-types', async (req, res) => {
+  try {
+    const { name, description } = req.body;
+    if (!name || !name.trim()) return res.status(400).json({ success: false, message: 'Training Type name is required' });
+    const newType = await prisma.trainingType.create({
+      data: { name: name.trim(), description: description?.trim() || null }
+    });
+    await logActivity('Admin', `Created Training Type: ${newType.name}`, 'Employee Training');
+    return res.json({ success: true, data: newType });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
+  }
+});
+
+// GET Trainers
+app.get('/api/trainers', async (req, res) => {
+  try {
+    const data = await prisma.trainer.findMany({ orderBy: { name: 'asc' } });
+    return res.json({ success: true, data });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
+  }
+});
+
+// POST Trainer
+app.post('/api/trainers', async (req, res) => {
+  try {
+    const { name, type, email, phone } = req.body;
+    if (!name || !name.trim()) return res.status(400).json({ success: false, message: 'Trainer name is required' });
+    const newTrainer = await prisma.trainer.create({
+      data: {
+        name: name.trim(),
+        type: type || 'Internal',
+        email: email?.trim() || null,
+        phone: phone?.trim() || null
+      }
+    });
+    await logActivity('Admin', `Created Trainer: ${newTrainer.name}`, 'Employee Training');
+    return res.json({ success: true, data: newTrainer });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
+  }
+});
+
+// GET All Trainings (Filtered by Role & Employee scope)
+app.get('/api/trainings', async (req, res) => {
+  try {
+    const userRole = req.headers['x-user-role'] || req.query.role || 'SUPERADMIN';
+    const userId = req.headers['x-user-id'] || req.query.userId;
+    const userEmail = req.headers['x-user-email'] || req.query.userEmail;
+
+    const isAdmin = ['SUPERADMIN', 'MASTER_ADMIN', 'SUB_ADMIN'].includes(userRole);
+
+    let whereClause = {};
+
+    // Standard employee view: only see trainings assigned to them
+    if (!isAdmin && (userId || userEmail)) {
+      let currentUserId = userId;
+      let userDept = null;
+
+      if (!currentUserId && userEmail) {
+        const currentUserObj = await prisma.user.findUnique({ where: { email: userEmail } });
+        if (currentUserObj) {
+          currentUserId = currentUserObj.id;
+          userDept = currentUserObj.department;
+        }
+      } else if (currentUserId) {
+        const currentUserObj = await prisma.user.findUnique({ where: { id: currentUserId } });
+        if (currentUserObj) {
+          userDept = currentUserObj.department;
+        }
+      }
+
+      if (currentUserId) {
+        whereClause = {
+          OR: [
+            { employeeSelection: 'ALL' },
+            ...(userDept ? [{ employeeSelection: 'DEPARTMENT', targetDepartment: userDept }] : []),
+            {
+              assignedEmployees: {
+                some: { userId: currentUserId }
+              }
+            }
+          ]
+        };
+      }
+    }
+
+    const trainings = await prisma.training.findMany({
+      where: whereClause,
+      include: {
+        assignedEmployees: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                designation: true,
+                department: true,
+                branch: true,
+                avatarUrl: true
+              }
+            }
+          }
+        }
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    return res.json({ success: true, data: trainings });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
+  }
+});
+
+// POST Create New Training
+app.post('/api/trainings', async (req, res) => {
+  try {
+    const {
+      branch,
+      trainerOption,
+      trainingType,
+      trainer,
+      trainingCost,
+      employeeSelection,
+      targetDepartment,
+      employeeIds,
+      startDate,
+      endDate,
+      description,
+      title,
+      status,
+      createdById
+    } = req.body;
+
+    if (!trainingType) return res.status(400).json({ success: false, message: 'Training Type is required' });
+    if (!trainer) return res.status(400).json({ success: false, message: 'Trainer is required' });
+    if (!startDate || !endDate) return res.status(400).json({ success: false, message: 'Start and End Dates are required' });
+
+    let assignedUserIds = [];
+
+    if (employeeSelection === 'ALL' || (!employeeIds || employeeIds.length === 0) && !employeeSelection) {
+      const allUsers = await prisma.user.findMany({
+        where: { role: { not: 'CLIENT' } },
+        select: { id: true }
+      });
+      assignedUserIds = allUsers.map(u => u.id);
+    } else if (employeeSelection === 'DEPARTMENT' && targetDepartment) {
+      const deptUsers = await prisma.user.findMany({
+        where: { department: targetDepartment },
+        select: { id: true }
+      });
+      assignedUserIds = deptUsers.map(u => u.id);
+    } else if (Array.isArray(employeeIds) && employeeIds.length > 0) {
+      if (employeeIds.includes('ALL')) {
+        const allUsers = await prisma.user.findMany({
+          where: { role: { not: 'CLIENT' } },
+          select: { id: true }
+        });
+        assignedUserIds = allUsers.map(u => u.id);
+      } else {
+        assignedUserIds = employeeIds;
+      }
+    }
+
+    const trainingName = title || `${trainingType} - ${trainer} (${branch || 'General'})`;
+
+    const newTraining = await prisma.training.create({
+      data: {
+        title: trainingName,
+        branch: branch || 'Kolkata',
+        trainerOption: trainerOption || 'Internal',
+        trainingType,
+        trainer,
+        trainingCost: parseFloat(trainingCost) || 0,
+        employeeSelection: employeeSelection || (assignedUserIds.length > 0 ? 'SELECTED' : 'ALL'),
+        targetDepartment: targetDepartment || null,
+        startDate: new Date(startDate),
+        endDate: new Date(endDate),
+        description: description || null,
+        status: status || 'SCHEDULED',
+        createdById: createdById || null,
+        assignedEmployees: {
+          create: assignedUserIds.map(uid => ({
+            userId: uid,
+            status: 'ASSIGNED'
+          }))
+        }
+      },
+      include: {
+        assignedEmployees: {
+          include: {
+            user: {
+              select: { id: true, name: true, email: true, designation: true, department: true, branch: true }
+            }
+          }
+        }
+      }
+    });
+
+    await logActivity('HR Admin', `Created Training: ${newTraining.title}`, 'Employee Training');
+    return res.json({ success: true, data: newTraining });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
+  }
+});
+
+// PUT Update Training
+app.put('/api/trainings/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      branch,
+      trainerOption,
+      trainingType,
+      trainer,
+      trainingCost,
+      employeeSelection,
+      targetDepartment,
+      employeeIds,
+      startDate,
+      endDate,
+      description,
+      title,
+      status
+    } = req.body;
+
+    const existing = await prisma.training.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ success: false, message: 'Training record not found' });
+
+    const updatedTraining = await prisma.training.update({
+      where: { id },
+      data: {
+        title: title || existing.title,
+        branch: branch !== undefined ? branch : existing.branch,
+        trainerOption: trainerOption || existing.trainerOption,
+        trainingType: trainingType || existing.trainingType,
+        trainer: trainer || existing.trainer,
+        trainingCost: trainingCost !== undefined ? parseFloat(trainingCost) : existing.trainingCost,
+        employeeSelection: employeeSelection || existing.employeeSelection,
+        targetDepartment: targetDepartment !== undefined ? targetDepartment : existing.targetDepartment,
+        startDate: startDate ? new Date(startDate) : existing.startDate,
+        endDate: endDate ? new Date(endDate) : existing.endDate,
+        description: description !== undefined ? description : existing.description,
+        status: status || existing.status
+      }
+    });
+
+    if (Array.isArray(employeeIds)) {
+      let assignedUserIds = [];
+      if (employeeIds.includes('ALL')) {
+        const allUsers = await prisma.user.findMany({ select: { id: true } });
+        assignedUserIds = allUsers.map(u => u.id);
+      } else {
+        assignedUserIds = employeeIds;
+      }
+
+      await prisma.trainingEmployee.deleteMany({ where: { trainingId: id } });
+      if (assignedUserIds.length > 0) {
+        await prisma.trainingEmployee.createMany({
+          data: assignedUserIds.map(uid => ({
+            trainingId: id,
+            userId: uid,
+            status: 'ASSIGNED'
+          }))
+        });
+      }
+    }
+
+    const fullUpdated = await prisma.training.findUnique({
+      where: { id },
+      include: {
+        assignedEmployees: {
+          include: {
+            user: { select: { id: true, name: true, email: true, designation: true, department: true, branch: true } }
+          }
+        }
+      }
+    });
+
+    await logActivity('HR Admin', `Updated Training: ${fullUpdated.title}`, 'Employee Training');
+    return res.json({ success: true, data: fullUpdated });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
+  }
+});
+
+// DELETE Training
+app.delete('/api/trainings/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const deleted = await prisma.training.delete({ where: { id } });
+    await logActivity('HR Admin', `Deleted Training: ${deleted.title || id}`, 'Employee Training');
+    return res.json({ success: true, message: 'Training record deleted successfully' });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
+  }
+});
+
+// UPDATE Employee Status in Training
+app.patch('/api/trainings/:id/employee-status', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { userId, status, remarks } = req.body;
+
+    const assignment = await prisma.trainingEmployee.findFirst({
+      where: { trainingId: id, userId }
+    });
+
+    if (!assignment) {
+      return res.status(404).json({ success: false, message: 'Employee training assignment not found' });
+    }
+
+    const updatedAssignment = await prisma.trainingEmployee.update({
+      where: { id: assignment.id },
+      data: {
+        status: status || assignment.status,
+        remarks: remarks !== undefined ? remarks : assignment.remarks
+      }
+    });
+
+    return res.json({ success: true, data: updatedAssignment });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
+  }
+});
+
 
 // Start Server if main module
 if (require.main === module) {
