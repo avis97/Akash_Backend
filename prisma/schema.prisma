@@ -367,6 +367,7 @@ model Quotation {
   preface            String?
   termsAndConditions String?
   totalAmount        Float
+  discount           Float?   @default(0)
   gstAmount          Float
   grandTotal         Float
   status             String   @default("DRAFT") // DRAFT, SENT, APPROVED, REJECTED

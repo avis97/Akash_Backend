@@ -219,6 +219,7 @@ async function main() {
         clientName: q.clientName || 'Client Corp',
         clientEmail: q.clientEmail || 'client@corp.com',
         totalAmount: Number(q.totalAmount) || 50000,
+        discount: Number(q.discount) || 0,
         gstAmount: Number(q.gstAmount) || 9000,
         grandTotal: Number(q.grandTotal) || 59000,
         status: q.status || 'SENT',

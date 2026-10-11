@@ -2600,12 +2600,14 @@ async function generateNextInvoiceNumber() {
 app.post('/api/billing/quotations', async (req, res) => {
   try {
     const { 
-      quotationNumber, documentHead, subject, kindAttention, clientId, clientName, clientEmail, clientPhone, clientAddress, clientGst, clientPan, preface, termsAndConditions, totalAmount, gstAmount, grandTotal, items, validUntil 
+      quotationNumber, documentHead, subject, kindAttention, clientId, clientName, clientEmail, clientPhone, clientAddress, clientGst, clientPan, preface, termsAndConditions, totalAmount, discount, gstAmount, grandTotal, items, validUntil 
     } = req.body;
 
     const total = Number(totalAmount) || 0;
-    const gst = gstAmount !== undefined ? Number(gstAmount) : Math.round(total * 0.18);
-    const grand = grandTotal !== undefined ? Number(grandTotal) : total + gst;
+    const disc = discount !== undefined ? Math.max(0, Number(discount) || 0) : 0;
+    const taxable = Math.max(0, total - disc);
+    const gst = gstAmount !== undefined ? Number(gstAmount) : Math.round(taxable * 0.18);
+    const grand = grandTotal !== undefined ? Number(grandTotal) : taxable + gst;
     let qNo = quotationNumber ? quotationNumber.trim() : await generateNextQuotationNumber();
     const existingQ = await prisma.quotation.findUnique({ where: { quotationNumber: qNo } });
     if (existingQ) {
@@ -2628,6 +2630,7 @@ app.post('/api/billing/quotations', async (req, res) => {
         preface: preface || null,
         termsAndConditions: typeof termsAndConditions === 'object' ? JSON.stringify(termsAndConditions) : (termsAndConditions || null),
         totalAmount: total,
+        discount: disc,
         gstAmount: gst,
         grandTotal: grand,
         status: 'SENT',
@@ -2656,14 +2659,16 @@ app.put('/api/billing/quotations/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { 
-      quotationNumber, documentHead, subject, kindAttention, clientName, clientEmail, clientPhone, clientAddress, clientGst, clientPan, preface, termsAndConditions, totalAmount, gstAmount, grandTotal, status, items, validUntil 
+      quotationNumber, documentHead, subject, kindAttention, clientName, clientEmail, clientPhone, clientAddress, clientGst, clientPan, preface, termsAndConditions, totalAmount, discount, gstAmount, grandTotal, status, items, validUntil 
     } = req.body;
     const existing = await prisma.quotation.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ success: false, message: 'Quotation not found' });
 
     const total = totalAmount !== undefined ? Number(totalAmount) : existing.totalAmount;
-    const gst = gstAmount !== undefined ? Number(gstAmount) : Math.round(total * 0.18);
-    const grand = grandTotal !== undefined ? Number(grandTotal) : total + gst;
+    const disc = discount !== undefined ? Math.max(0, Number(discount) || 0) : (existing.discount || 0);
+    const taxable = Math.max(0, total - disc);
+    const gst = gstAmount !== undefined ? Number(gstAmount) : Math.round(taxable * 0.18);
+    const grand = grandTotal !== undefined ? Number(grandTotal) : taxable + gst;
 
     const updated = await prisma.quotation.update({
       where: { id },
@@ -2680,7 +2685,7 @@ app.put('/api/billing/quotations/:id', async (req, res) => {
         ...(clientPan !== undefined && { clientPan }),
         ...(preface !== undefined && { preface }),
         ...(termsAndConditions !== undefined && { termsAndConditions: typeof termsAndConditions === 'object' ? JSON.stringify(termsAndConditions) : termsAndConditions }),
-        ...(totalAmount !== undefined && { totalAmount: total, gstAmount: gst, grandTotal: grand }),
+        ...((totalAmount !== undefined || discount !== undefined) && { totalAmount: total, discount: disc, gstAmount: gst, grandTotal: grand }),
         ...(status && { status }),
         ...(validUntil && { validUntil: new Date(validUntil) }),
         ...(items && { itemsJson: JSON.stringify(items) })
@@ -3812,11 +3817,14 @@ app.put('/api/billing/invoices/:id', async (req, res) => {
 app.put('/api/billing/quotations/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { clientName, clientEmail, totalAmount, validUntil, status } = req.body;
+    const { clientName, clientEmail, totalAmount, discount, validUntil, status } = req.body;
 
-    const total = totalAmount !== undefined ? Number(totalAmount) : undefined;
-    const gst = total !== undefined ? Math.round(total * 0.18) : undefined;
-    const grand = total !== undefined ? total + gst : undefined;
+    const existing = await prisma.quotation.findUnique({ where: { id } });
+    const total = totalAmount !== undefined ? Number(totalAmount) : (existing ? existing.totalAmount : undefined);
+    const disc = discount !== undefined ? Math.max(0, Number(discount) || 0) : (existing ? existing.discount || 0 : 0);
+    const taxable = total !== undefined ? Math.max(0, total - disc) : undefined;
+    const gst = taxable !== undefined ? Math.round(taxable * 0.18) : undefined;
+    const grand = taxable !== undefined && gst !== undefined ? taxable + gst : undefined;
 
     const updated = await prisma.quotation.update({
       where: { id },
@@ -3824,6 +3832,7 @@ app.put('/api/billing/quotations/:id', async (req, res) => {
         ...(clientName && { clientName }),
         ...(clientEmail && { clientEmail }),
         ...(total !== undefined && { totalAmount: total }),
+        ...(discount !== undefined && { discount: disc }),
         ...(gst !== undefined && { gstAmount: gst }),
         ...(grand !== undefined && { grandTotal: grand }),
         ...(validUntil && { validUntil: new Date(validUntil) }),
