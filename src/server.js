@@ -2604,8 +2604,9 @@ app.post('/api/billing/quotations', async (req, res) => {
     } = req.body;
 
     const total = Number(totalAmount) || 0;
-    const disc = discount !== undefined ? Math.max(0, Number(discount) || 0) : 0;
-    const taxable = Math.max(0, total - disc);
+    const discPercent = discount !== undefined ? Math.max(0, Math.min(100, Number(discount) || 0)) : 0;
+    const discAmount = Math.round(total * (discPercent / 100));
+    const taxable = Math.max(0, total - discAmount);
     const gst = gstAmount !== undefined ? Number(gstAmount) : Math.round(taxable * 0.18);
     const grand = grandTotal !== undefined ? Number(grandTotal) : taxable + gst;
     let qNo = quotationNumber ? quotationNumber.trim() : await generateNextQuotationNumber();
@@ -2630,7 +2631,7 @@ app.post('/api/billing/quotations', async (req, res) => {
         preface: preface || null,
         termsAndConditions: typeof termsAndConditions === 'object' ? JSON.stringify(termsAndConditions) : (termsAndConditions || null),
         totalAmount: total,
-        discount: disc,
+        discount: discPercent,
         gstAmount: gst,
         grandTotal: grand,
         status: 'SENT',
@@ -2665,8 +2666,9 @@ app.put('/api/billing/quotations/:id', async (req, res) => {
     if (!existing) return res.status(404).json({ success: false, message: 'Quotation not found' });
 
     const total = totalAmount !== undefined ? Number(totalAmount) : existing.totalAmount;
-    const disc = discount !== undefined ? Math.max(0, Number(discount) || 0) : (existing.discount || 0);
-    const taxable = Math.max(0, total - disc);
+    const discPercent = discount !== undefined ? Math.max(0, Math.min(100, Number(discount) || 0)) : (existing.discount || 0);
+    const discAmount = Math.round(total * (discPercent / 100));
+    const taxable = Math.max(0, total - discAmount);
     const gst = gstAmount !== undefined ? Number(gstAmount) : Math.round(taxable * 0.18);
     const grand = grandTotal !== undefined ? Number(grandTotal) : taxable + gst;
 
@@ -3821,8 +3823,9 @@ app.put('/api/billing/quotations/:id', async (req, res) => {
 
     const existing = await prisma.quotation.findUnique({ where: { id } });
     const total = totalAmount !== undefined ? Number(totalAmount) : (existing ? existing.totalAmount : undefined);
-    const disc = discount !== undefined ? Math.max(0, Number(discount) || 0) : (existing ? existing.discount || 0 : 0);
-    const taxable = total !== undefined ? Math.max(0, total - disc) : undefined;
+    const discPercent = discount !== undefined ? Math.max(0, Math.min(100, Number(discount) || 0)) : (existing ? existing.discount || 0 : 0);
+    const discAmount = total !== undefined ? Math.round(total * (discPercent / 100)) : 0;
+    const taxable = total !== undefined ? Math.max(0, total - discAmount) : undefined;
     const gst = taxable !== undefined ? Math.round(taxable * 0.18) : undefined;
     const grand = taxable !== undefined && gst !== undefined ? taxable + gst : undefined;
 
@@ -3832,7 +3835,7 @@ app.put('/api/billing/quotations/:id', async (req, res) => {
         ...(clientName && { clientName }),
         ...(clientEmail && { clientEmail }),
         ...(total !== undefined && { totalAmount: total }),
-        ...(discount !== undefined && { discount: disc }),
+        ...(discount !== undefined && { discount: discPercent }),
         ...(gst !== undefined && { gstAmount: gst }),
         ...(grand !== undefined && { grandTotal: grand }),
         ...(validUntil && { validUntil: new Date(validUntil) }),
