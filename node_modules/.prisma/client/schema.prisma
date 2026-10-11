@@ -398,6 +398,9 @@ model Invoice {
   preface            String?
   termsAndConditions String?
   totalAmount        Float
+  discount           Float?        @default(0)
+  gstAmount          Float?        @default(0)
+  grandTotal         Float?
   paidAmount         Float         @default(0)
   balanceAmount      Float
   dueDate            DateTime

@@ -2802,13 +2802,16 @@ app.post('/api/billing/quotations/:id/generate-bill', async (req, res) => {
     if (!existing) return res.status(404).json({ success: false, message: 'Quotation not found' });
 
     const invNo = invoiceNumber ? invoiceNumber.trim() : await generateNextInvoiceNumber();
-    const billAmount = existing.grandTotal || existing.totalAmount;
+    const billSubtotal = existing.totalAmount;
+    const billDiscount = existing.discount || 0;
+    const billGst = existing.gstAmount;
+    const billGrand = existing.grandTotal || (existing.totalAmount + existing.gstAmount);
 
     let itemsParsed = [];
     try {
       itemsParsed = JSON.parse(existing.itemsJson);
     } catch (e) {
-      itemsParsed = [{ name: 'Service & System Installation', qty: 1, amount: billAmount }];
+      itemsParsed = [{ name: 'Service & System Installation', qty: 1, amount: billGrand, total: billGrand }];
     }
 
     // 1. GENERATE FINAL TAX INVOICE IN DATABASE WITH ALL AKASH ENGINEERING DETAILS
@@ -2828,9 +2831,12 @@ app.post('/api/billing/quotations/:id/generate-bill', async (req, res) => {
         kindAttention: existing.kindAttention,
         preface: existing.preface,
         termsAndConditions: existing.termsAndConditions,
-        totalAmount: billAmount,
+        totalAmount: billSubtotal,
+        discount: billDiscount,
+        gstAmount: billGst,
+        grandTotal: billGrand,
         paidAmount: 0,
-        balanceAmount: billAmount,
+        balanceAmount: billGrand,
         dueDate: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000), // 15 Days Due Date
         status: 'UNPAID',
         itemsJson: existing.itemsJson || JSON.stringify(itemsParsed)
@@ -2890,10 +2896,16 @@ app.get('/api/billing/invoices', async (req, res) => {
 app.post('/api/billing/invoices', async (req, res) => {
   try {
     const { 
-      invoiceNumber, documentHead, subject, kindAttention, clientId, clientName, clientEmail, clientPhone, clientAddress, clientGst, clientPan, preface, termsAndConditions, totalAmount, dueDate, items, quotationId 
+      invoiceNumber, documentHead, subject, kindAttention, clientId, clientName, clientEmail, clientPhone, clientAddress, clientGst, clientPan, preface, termsAndConditions, totalAmount, discount, gstAmount, grandTotal, dueDate, items, quotationId 
     } = req.body;
 
     const total = Number(totalAmount) || 0;
+    const discPercent = discount !== undefined ? Math.max(0, Math.min(100, Number(discount) || 0)) : 0;
+    const discAmount = Math.round(total * (discPercent / 100));
+    const taxable = Math.max(0, total - discAmount);
+    const gst = gstAmount !== undefined ? Number(gstAmount) : Math.round(taxable * 0.18);
+    const grand = grandTotal !== undefined ? Number(grandTotal) : taxable + gst;
+
     let invNo = invoiceNumber ? invoiceNumber.trim() : await generateNextInvoiceNumber();
     const existingInv = await prisma.invoice.findUnique({ where: { invoiceNumber: invNo } });
     if (existingInv) {
@@ -2917,19 +2929,22 @@ app.post('/api/billing/invoices', async (req, res) => {
         preface: preface || null,
         termsAndConditions: typeof termsAndConditions === 'object' ? JSON.stringify(termsAndConditions) : (termsAndConditions || null),
         totalAmount: total,
+        discount: discPercent,
+        gstAmount: gst,
+        grandTotal: grand,
         paidAmount: 0,
-        balanceAmount: total,
+        balanceAmount: grand,
         dueDate: dueDate ? new Date(dueDate) : new Date(Date.now() + 15 * 24 * 60 * 60 * 1000),
         status: 'UNPAID',
-        itemsJson: JSON.stringify(items || [{ name: 'Equipment Supply & Setup', qty: 1, amount: total }])
+        itemsJson: JSON.stringify(items || [{ name: 'Equipment Supply & Setup', qty: 1, amount: total, total }])
       }
     });
 
-    if (items) {
+    if (items && Array.isArray(items)) {
       await deductInventoryStockForItems(items, invNo, req.user?.name || 'Superadmin');
     }
 
-    await logActivity('Billing Officer', `Issued Invoice #${newInv.invoiceNumber} to ${clientName} (₹${total}) and updated Inventory stock`, 'Billing & Invoicing');
+    await logActivity('Billing Officer', `Issued Invoice #${newInv.invoiceNumber} to ${clientName} (₹${grand}) and updated Inventory stock`, 'Billing & Invoicing');
     return res.status(201).json({ success: true, data: newInv });
   } catch (err) {
     return res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
@@ -2944,7 +2959,8 @@ app.put('/api/billing/invoices/:id', async (req, res) => {
     if (!existing) return res.status(404).json({ success: false, message: 'Invoice not found' });
 
     const newPaid = paidAmount !== undefined ? Number(paidAmount) : existing.paidAmount;
-    const newBal = Math.max(0, existing.totalAmount - newPaid);
+    const invTotal = existing.grandTotal || existing.totalAmount;
+    const newBal = Math.max(0, invTotal - newPaid);
     const newStatus = status || (newBal === 0 ? 'PAID' : newPaid > 0 ? 'PARTIAL' : existing.status);
 
     const updated = await prisma.invoice.update({
