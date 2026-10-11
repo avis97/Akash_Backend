@@ -693,7 +693,8 @@ async function handleCreateUserOrEmployee(req, res) {
       name, email, password, phone, designation, role,
       employeeId, basicSalary, dob, gender, address, branch, department, dateOfJoining,
       hsCertificate, panCard, aadhaarCard, passport, graduation, experienceLetter, addressProof,
-      accountHolderName, accountNumber, bankName, bankIdentifierCode, branchLocation
+      accountHolderName, accountNumber, bankName, bankIdentifierCode, branchLocation,
+      gstNumber, clientGst, gst, gstin
     } = req.body;
 
     if (!email || !name) {
@@ -741,7 +742,8 @@ async function handleCreateUserOrEmployee(req, res) {
         accountNumber: accountNumber || null,
         bankName: bankName || null,
         bankIdentifierCode: bankIdentifierCode || null,
-        branchLocation: branchLocation || null
+        branchLocation: branchLocation || null,
+        gstNumber: gstNumber || clientGst || gst || gstin || null
       }
     });
 
@@ -757,7 +759,8 @@ async function handleCreateUserOrEmployee(req, res) {
         password: plainPassword,
         role: newUser.role,
         phone: newUser.phone,
-        designation: newUser.designation
+        designation: newUser.designation,
+        gstNumber: newUser.gstNumber
       }
     });
   } catch (err) {
@@ -778,7 +781,8 @@ app.put('/api/users/:id', authenticateToken, requireSuperAdmin, async (req, res)
       name, email, password, phone, designation, role, avatarUrl,
       employeeId, basicSalary, dob, gender, address, branch, department, dateOfJoining,
       hsCertificate, panCard, aadhaarCard, passport, graduation, experienceLetter, addressProof,
-      accountHolderName, accountNumber, bankName, bankIdentifierCode, branchLocation
+      accountHolderName, accountNumber, bankName, bankIdentifierCode, branchLocation,
+      gstNumber, clientGst, gst, gstin
     } = req.body;
 
     const existingUser = await prisma.user.findUnique({ where: { id } });
@@ -819,7 +823,10 @@ app.put('/api/users/:id', authenticateToken, requireSuperAdmin, async (req, res)
       ...(accountNumber !== undefined && { accountNumber }),
       ...(bankName !== undefined && { bankName }),
       ...(bankIdentifierCode !== undefined && { bankIdentifierCode }),
-      ...(branchLocation !== undefined && { branchLocation })
+      ...(branchLocation !== undefined && { branchLocation }),
+      ...((gstNumber !== undefined || clientGst !== undefined || gst !== undefined || gstin !== undefined) && {
+        gstNumber: gstNumber || clientGst || gst || gstin || null
+      })
     };
 
     if (password && password.trim() !== '') {

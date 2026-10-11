@@ -101,6 +101,7 @@ model User {
 
   // Client Lead & Customer Status
   clientStatus         String?   @default("LEAD") // LEAD, QUOTATION_SENT, ACTIVE_CLIENT
+  gstNumber            String?   // Customer / Client GSTIN Tax Number
 
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
