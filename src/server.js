@@ -3532,7 +3532,25 @@ app.get('/api/amc', async (req, res) => {
         checklists: true
       }
     });
-    return res.json({ success: true, data: amcs });
+
+    const enriched = amcs.map(amc => {
+      let about = amc.aboutDetails || amc.notes || '';
+      let img = amc.imageUrl || '';
+      if (amc.notes && amc.notes.startsWith('{')) {
+        try {
+          const parsed = JSON.parse(amc.notes);
+          if (parsed.aboutDetails !== undefined) about = parsed.aboutDetails;
+          if (parsed.imageUrl !== undefined) img = parsed.imageUrl;
+        } catch (e) {}
+      }
+      return {
+        ...amc,
+        aboutDetails: about,
+        imageUrl: img
+      };
+    });
+
+    return res.json({ success: true, data: enriched });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -3540,11 +3558,16 @@ app.get('/api/amc', async (req, res) => {
 
 app.post('/api/amc', async (req, res) => {
   try {
-    const { siteName, clientName, address, assignedEmployeeId, visitDate, notes } = req.body;
+    const { siteName, clientName, address, assignedEmployeeId, visitDate, notes, aboutDetails, imageUrl } = req.body;
     let emp = null;
     if (assignedEmployeeId) {
       emp = await prisma.user.findUnique({ where: { id: assignedEmployeeId } });
     }
+
+    const effectiveAbout = (aboutDetails !== undefined ? aboutDetails : (notes || '')) || '';
+    const packagedNotes = (imageUrl || aboutDetails)
+      ? JSON.stringify({ aboutDetails: effectiveAbout, imageUrl: imageUrl || '' })
+      : (notes || '');
 
     const newAMC = await prisma.siteAMC.create({
       data: {
@@ -3555,7 +3578,9 @@ app.post('/api/amc', async (req, res) => {
         assignedEmployeeName: emp ? emp.name : 'Field Staff',
         visitDate: visitDate ? new Date(visitDate) : new Date(),
         status: 'SCHEDULED',
-        notes,
+        notes: packagedNotes,
+        aboutDetails: effectiveAbout,
+        imageUrl: imageUrl || null,
         checklists: {
           create: [
             { taskName: 'Inspection of electrical panels & cable connectors', isCompleted: false },
@@ -3568,7 +3593,14 @@ app.post('/api/amc', async (req, res) => {
     });
 
     await logActivity('Master Admin', `Assigned Site AMC visit at ${siteName} to ${newAMC.assignedEmployeeName}`, 'Site AMC Tracking');
-    return res.status(201).json({ success: true, data: newAMC });
+    return res.status(201).json({
+      success: true,
+      data: {
+        ...newAMC,
+        aboutDetails: effectiveAbout,
+        imageUrl: imageUrl || ''
+      }
+    });
   } catch (err) {
     console.error('AMC schedule error:', err);
     return res.status(500).json({ success: false, message: err.message });
@@ -3979,12 +4011,17 @@ app.put('/api/vouchers/:id', async (req, res) => {
 app.put('/api/amc/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { siteName, clientName, address, assignedEmployeeId, visitDate, status, notes } = req.body;
+    const { siteName, clientName, address, assignedEmployeeId, visitDate, status, notes, aboutDetails, imageUrl } = req.body;
 
     let emp = null;
     if (assignedEmployeeId) {
       emp = await prisma.user.findUnique({ where: { id: assignedEmployeeId } });
     }
+
+    const effectiveAbout = aboutDetails !== undefined ? aboutDetails : notes;
+    const packagedNotes = (imageUrl !== undefined || aboutDetails !== undefined)
+      ? JSON.stringify({ aboutDetails: effectiveAbout || '', imageUrl: imageUrl || '' })
+      : notes;
 
     const updated = await prisma.siteAMC.update({
       where: { id },
@@ -3996,12 +4033,21 @@ app.put('/api/amc/:id', async (req, res) => {
         ...(emp && { assignedEmployeeName: emp.name }),
         ...(visitDate && { visitDate: new Date(visitDate) }),
         ...(status && { status }),
-        ...(notes !== undefined && { notes })
+        ...(packagedNotes !== undefined && { notes: packagedNotes }),
+        ...(effectiveAbout !== undefined && { aboutDetails: effectiveAbout }),
+        ...(imageUrl !== undefined && { imageUrl })
       }
     });
 
     await logActivity('Master Admin', `Updated site AMC record #${id}`, 'Site AMC Tracking');
-    return res.json({ success: true, data: updated });
+    return res.json({
+      success: true,
+      data: {
+        ...updated,
+        aboutDetails: effectiveAbout || '',
+        imageUrl: imageUrl || ''
+      }
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
