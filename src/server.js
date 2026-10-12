@@ -2668,7 +2668,19 @@ app.post('/api/billing/quotations', async (req, res) => {
         grandTotal: grand,
         status: 'SENT',
         validUntil: validUntil ? new Date(validUntil) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-        itemsJson: JSON.stringify(items || [{ name: 'Service & System Installation', qty: 1, amount: total, total }])
+        itemsJson: JSON.stringify(
+          Array.isArray(items) && items.length > 0
+            ? items.map(it => ({
+                productId: it.productId || '',
+                name: it.name || '',
+                description: it.description || '',
+                code: it.code || '',
+                unitPrice: Number(it.unitPrice) || 0,
+                qty: Number(it.qty) || 1,
+                total: Number(it.total) || ((Number(it.qty) || 1) * (Number(it.unitPrice) || 0))
+              }))
+            : [{ name: 'Service & System Installation', description: '', qty: 1, amount: total, total }]
+        )
       }
     });
 
@@ -2705,6 +2717,19 @@ app.put('/api/billing/quotations/:id', async (req, res) => {
     const gst = gstAmount !== undefined ? Number(gstAmount) : Math.round(taxable * 0.18);
     const grand = grandTotal !== undefined ? Number(grandTotal) : taxable + gst;
 
+    let sanitizedItems = undefined;
+    if (items && Array.isArray(items)) {
+      sanitizedItems = items.map(it => ({
+        productId: it.productId || '',
+        name: it.name || '',
+        description: it.description || '',
+        code: it.code || '',
+        unitPrice: Number(it.unitPrice) || 0,
+        qty: Number(it.qty) || 1,
+        total: Number(it.total) || ((Number(it.qty) || 1) * (Number(it.unitPrice) || 0))
+      }));
+    }
+
     const updated = await prisma.quotation.update({
       where: { id },
       data: {
@@ -2725,10 +2750,10 @@ app.put('/api/billing/quotations/:id', async (req, res) => {
         ...(branchLocation !== undefined && { branchLocation }),
         ...(preface !== undefined && { preface }),
         ...(termsAndConditions !== undefined && { termsAndConditions: typeof termsAndConditions === 'object' ? JSON.stringify(termsAndConditions) : termsAndConditions }),
-        ...((totalAmount !== undefined || discount !== undefined) && { totalAmount: total, discount: disc, gstAmount: gst, grandTotal: grand }),
+        ...((totalAmount !== undefined || discount !== undefined) && { totalAmount: total, discount: discPercent, gstAmount: gst, grandTotal: grand }),
         ...(status && { status }),
         ...(validUntil && { validUntil: new Date(validUntil) }),
-        ...(items && { itemsJson: JSON.stringify(items) })
+        ...(sanitizedItems && { itemsJson: JSON.stringify(sanitizedItems) })
       }
     });
 
@@ -2991,7 +3016,19 @@ app.post('/api/billing/invoices', async (req, res) => {
         balanceAmount: grand,
         dueDate: dueDate ? new Date(dueDate) : new Date(Date.now() + 15 * 24 * 60 * 60 * 1000),
         status: 'UNPAID',
-        itemsJson: JSON.stringify(items || [{ name: 'Equipment Supply & Setup', qty: 1, amount: total, total }])
+        itemsJson: JSON.stringify(
+          Array.isArray(items) && items.length > 0
+            ? items.map(it => ({
+                productId: it.productId || '',
+                name: it.name || '',
+                description: it.description || '',
+                code: it.code || '',
+                unitPrice: Number(it.unitPrice) || 0,
+                qty: Number(it.qty) || 1,
+                total: Number(it.total) || ((Number(it.qty) || 1) * (Number(it.unitPrice) || 0))
+              }))
+            : [{ name: 'Equipment Supply & Setup', description: '', qty: 1, amount: total, total }]
+        )
       }
     });
 
@@ -3009,21 +3046,68 @@ app.post('/api/billing/invoices', async (req, res) => {
 app.put('/api/billing/invoices/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { paidAmount, status } = req.body;
+    const { 
+      invoiceNumber, documentHead, subject, kindAttention, clientName, clientEmail, clientPhone, clientAddress, clientGst, clientPan, preface, termsAndConditions, totalAmount, discount, gstAmount, grandTotal, paidAmount, status, dueDate, items,
+      accountHolderName, accountNumber, bankName, bankIdentifierCode, branchLocation
+    } = req.body;
     const existing = await prisma.invoice.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ success: false, message: 'Invoice not found' });
 
+    let sanitizedItems = undefined;
+    if (items && Array.isArray(items)) {
+      sanitizedItems = items.map(it => ({
+        productId: it.productId || '',
+        name: it.name || '',
+        description: it.description || '',
+        code: it.code || '',
+        unitPrice: Number(it.unitPrice) || 0,
+        qty: Number(it.qty) || 1,
+        total: Number(it.total) || ((Number(it.qty) || 1) * (Number(it.unitPrice) || 0))
+      }));
+    }
+
+    const total = totalAmount !== undefined ? Number(totalAmount) : existing.totalAmount;
+    const discPercent = discount !== undefined ? Math.max(0, Math.min(100, Number(discount) || 0)) : (existing.discount || 0);
+    const discAmount = Math.round(total * (discPercent / 100));
+    const taxable = Math.max(0, total - discAmount);
+    const gst = gstAmount !== undefined ? Number(gstAmount) : Math.round(taxable * 0.18);
+    const grand = grandTotal !== undefined ? Number(grandTotal) : taxable + gst;
+
     const newPaid = paidAmount !== undefined ? Number(paidAmount) : existing.paidAmount;
-    const invTotal = existing.grandTotal || existing.totalAmount;
-    const newBal = Math.max(0, invTotal - newPaid);
+    const newBal = Math.max(0, grand - newPaid);
     const newStatus = status || (newBal === 0 ? 'PAID' : newPaid > 0 ? 'PARTIAL' : existing.status);
 
     const updated = await prisma.invoice.update({
       where: { id },
       data: {
+        ...(invoiceNumber && { invoiceNumber }),
+        ...(documentHead && { documentHead }),
+        ...(subject !== undefined && { subject }),
+        ...(kindAttention !== undefined && { kindAttention }),
+        ...(clientName && { clientName }),
+        ...(clientEmail && { clientEmail }),
+        ...(clientPhone !== undefined && { clientPhone }),
+        ...(clientAddress !== undefined && { clientAddress }),
+        ...(clientGst !== undefined && { clientGst }),
+        ...(clientPan !== undefined && { clientPan }),
+        ...(accountHolderName !== undefined && { accountHolderName }),
+        ...(accountNumber !== undefined && { accountNumber }),
+        ...(bankName !== undefined && { bankName }),
+        ...(bankIdentifierCode !== undefined && { bankIdentifierCode }),
+        ...(branchLocation !== undefined && { branchLocation }),
+        ...(preface !== undefined && { preface }),
+        ...(termsAndConditions !== undefined && { termsAndConditions: typeof termsAndConditions === 'object' ? JSON.stringify(termsAndConditions) : termsAndConditions }),
+        ...((totalAmount !== undefined || discount !== undefined || gstAmount !== undefined || grandTotal !== undefined) && { 
+          totalAmount: total, 
+          discount: discPercent, 
+          gstAmount: gst, 
+          grandTotal: grand 
+        }),
         paidAmount: newPaid,
         balanceAmount: newBal,
-        status: newStatus
+        status: newStatus,
+        ...(dueDate && { dueDate: new Date(dueDate) }),
+        ...(sanitizedItems && { itemsJson: JSON.stringify(sanitizedItems) })
       }
     });
 
