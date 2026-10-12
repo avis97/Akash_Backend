@@ -2580,8 +2580,16 @@ app.get('/api/billing/quotations', async (req, res) => {
 });
 
 async function generateNextQuotationNumber() {
-  const count = await prisma.quotation.count();
-  const nextNum = 327 + count;
+  const allQuotations = await prisma.quotation.findMany({ select: { quotationNumber: true } });
+  let maxNum = 326;
+  allQuotations.forEach(q => {
+    const match = q.quotationNumber && q.quotationNumber.match(/(\d+)$/);
+    if (match) {
+      const num = parseInt(match[1], 10);
+      if (!isNaN(num) && num > maxNum) maxNum = num;
+    }
+  });
+  let nextNum = maxNum + 1;
   let qNo = `AKASH/QTN/25-26/${nextNum}`;
   let existing = await prisma.quotation.findUnique({ where: { quotationNumber: qNo } });
   let offset = 1;
@@ -2594,8 +2602,16 @@ async function generateNextQuotationNumber() {
 }
 
 async function generateNextInvoiceNumber() {
-  const count = await prisma.invoice.count();
-  const nextNum = 327 + count;
+  const allInvoices = await prisma.invoice.findMany({ select: { invoiceNumber: true } });
+  let maxNum = 326;
+  allInvoices.forEach(inv => {
+    const match = inv.invoiceNumber && inv.invoiceNumber.match(/(\d+)$/);
+    if (match) {
+      const num = parseInt(match[1], 10);
+      if (!isNaN(num) && num > maxNum) maxNum = num;
+    }
+  });
+  let nextNum = maxNum + 1;
   let invNo = `AKASH/INV/25-26/${nextNum}`;
   let existing = await prisma.invoice.findUnique({ where: { invoiceNumber: invNo } });
   let offset = 1;
@@ -2823,7 +2839,13 @@ app.post('/api/billing/quotations/:id/generate-bill', async (req, res) => {
     const existing = await prisma.quotation.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ success: false, message: 'Quotation not found' });
 
-    const invNo = invoiceNumber ? invoiceNumber.trim() : await generateNextInvoiceNumber();
+    let invNo = invoiceNumber ? invoiceNumber.trim() : await generateNextInvoiceNumber();
+    if (invNo) {
+      const collision = await prisma.invoice.findUnique({ where: { invoiceNumber: invNo } });
+      if (collision) {
+        invNo = await generateNextInvoiceNumber();
+      }
+    }
     const billSubtotal = existing.totalAmount;
     const billDiscount = existing.discount || 0;
     const billGst = existing.gstAmount;
