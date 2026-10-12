@@ -4,6 +4,7 @@ const dotenv = require('dotenv');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { PrismaClient } = require('@prisma/client');
+const { sendAccountCredentialsEmail, sendQuotationEmail, SMTP_USER } = require('./emailService');
 dotenv.config();
 
 const app = express();
@@ -749,9 +750,25 @@ async function handleCreateUserOrEmployee(req, res) {
 
     await logActivity(req.user?.name || 'Superadmin', `Created employee account (${finalEmployeeId}): ${name} (${email})`, 'User Management');
 
+    // Send email notification with login credentials (configured via vs.backup25@gmail.com)
+    let emailStatus = null;
+    try {
+      emailStatus = await sendAccountCredentialsEmail({
+        name: newUser.name,
+        email: newUser.email,
+        password: plainPassword,
+        role: newUser.role,
+        employeeId: newUser.employeeId,
+        designation: newUser.designation
+      });
+    } catch (mailErr) {
+      console.warn('Failed to dispatch welcome email:', mailErr.message);
+      emailStatus = { success: false, error: mailErr.message };
+    }
+
     return res.status(201).json({
       success: true,
-      message: 'Employee account created successfully in database',
+      message: `Account created successfully${emailStatus?.delivered ? ' and credentials sent to ' + newUser.email : ''}`,
       data: newUser,
       credentials: {
         name: newUser.name,
@@ -761,7 +778,8 @@ async function handleCreateUserOrEmployee(req, res) {
         phone: newUser.phone,
         designation: newUser.designation,
         gstNumber: newUser.gstNumber
-      }
+      },
+      emailNotification: emailStatus
     });
   } catch (err) {
     console.error('Employee creation error:', err);
@@ -2693,7 +2711,42 @@ app.post('/api/billing/quotations', async (req, res) => {
     }
 
     await logActivity('Superadmin', `Created and sent quotation #${newQ.quotationNumber} to Client ${clientName}`, 'Billing & Quotations');
-    return res.status(201).json({ success: true, data: newQ });
+
+    // Dispatch quotation details email to client (configured via vs.backup25@gmail.com)
+    let emailStatus = null;
+    try {
+      emailStatus = await sendQuotationEmail({
+        quotationNumber: newQ.quotationNumber,
+        clientName: newQ.clientName,
+        clientEmail: newQ.clientEmail,
+        subject: newQ.subject,
+        kindAttention: newQ.kindAttention,
+        items: items,
+        totalAmount: total,
+        discount: discPercent,
+        gstAmount: gst,
+        grandTotal: grand,
+        validUntil: newQ.validUntil,
+        preface: newQ.preface,
+        bankDetails: {
+          bankName: newQ.bankName,
+          accountNumber: newQ.accountNumber,
+          bankIdentifierCode: newQ.bankIdentifierCode,
+          accountHolderName: newQ.accountHolderName,
+          branchLocation: newQ.branchLocation
+        }
+      });
+    } catch (mailErr) {
+      console.warn('Failed to dispatch quotation email:', mailErr.message);
+      emailStatus = { success: false, error: mailErr.message };
+    }
+
+    return res.status(201).json({ 
+      success: true, 
+      data: newQ,
+      message: `Quotation #${newQ.quotationNumber} created${emailStatus?.delivered ? ' and emailed to ' + newQ.clientEmail : ''}`,
+      emailNotification: emailStatus
+    });
   } catch (err) {
     console.error('Error creating quotation:', err);
     return res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
