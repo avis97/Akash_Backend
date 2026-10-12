@@ -1,11 +1,10 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const dotenv = require('dotenv');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { PrismaClient } = require('@prisma/client');
 const { sendAccountCredentialsEmail, sendQuotationEmail, SMTP_USER } = require('./emailService');
-dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 5005;

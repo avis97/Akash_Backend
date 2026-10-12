@@ -1,22 +1,31 @@
+require('dotenv').config();
 const nodemailer = require('nodemailer');
 
 const SMTP_USER = process.env.SMTP_USER || 'vs.backup25@gmail.com';
-const SMTP_PASS = (process.env.SMTP_PASS || '').replace(/\s+/g, '');
-const SMTP_HOST = process.env.SMTP_HOST || 'smtp.gmail.com';
-const SMTP_PORT = Number(process.env.SMTP_PORT) || 587;
 const EMAIL_FROM = process.env.EMAIL_FROM || `Akash Engineering <${SMTP_USER}>`;
 
+function getSmtpConfig() {
+  const user = process.env.SMTP_USER || SMTP_USER;
+  const pass = (process.env.SMTP_PASS || '').replace(/\s+/g, '');
+  const host = process.env.SMTP_HOST || 'smtp.gmail.com';
+  const port = Number(process.env.SMTP_PORT) || 587;
+  const from = process.env.EMAIL_FROM || `Akash Engineering <${user}>`;
+  return { user, pass, host, port, from };
+}
+
 function createTransporter() {
-  if (!SMTP_PASS) {
+  const { user, pass, host, port } = getSmtpConfig();
+  if (!pass) {
+    console.warn('[Email Service Notice] SMTP_PASS is empty in process.env. Passwords/emails will run in simulation mode.');
     return null;
   }
   return nodemailer.createTransport({
-    host: SMTP_HOST,
-    port: SMTP_PORT,
-    secure: SMTP_PORT === 465,
+    host,
+    port,
+    secure: port === 465,
     auth: {
-      user: SMTP_USER,
-      pass: SMTP_PASS
+      user,
+      pass
     },
     tls: {
       rejectUnauthorized: false
