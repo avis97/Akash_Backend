@@ -2566,7 +2566,10 @@ app.get('/api/billing/quotations', async (req, res) => {
       orderBy: { createdAt: 'desc' },
       include: {
         client: {
-          select: { id: true, name: true, email: true, phone: true, clientStatus: true }
+          select: { 
+            id: true, name: true, email: true, phone: true, clientStatus: true,
+            accountHolderName: true, accountNumber: true, bankName: true, bankIdentifierCode: true, branchLocation: true
+          }
         }
       }
     });
@@ -2607,7 +2610,8 @@ async function generateNextInvoiceNumber() {
 app.post('/api/billing/quotations', async (req, res) => {
   try {
     const { 
-      quotationNumber, documentHead, subject, kindAttention, clientId, clientName, clientEmail, clientPhone, clientAddress, clientGst, clientPan, preface, termsAndConditions, totalAmount, discount, gstAmount, grandTotal, items, validUntil 
+      quotationNumber, documentHead, subject, kindAttention, clientId, clientName, clientEmail, clientPhone, clientAddress, clientGst, clientPan, preface, termsAndConditions, totalAmount, discount, gstAmount, grandTotal, items, validUntil,
+      accountHolderName, accountNumber, bankName, bankIdentifierCode, branchLocation
     } = req.body;
 
     const total = Number(totalAmount) || 0;
@@ -2635,6 +2639,11 @@ app.post('/api/billing/quotations', async (req, res) => {
         clientAddress: clientAddress || null,
         clientGst: clientGst || null,
         clientPan: clientPan || null,
+        accountHolderName: accountHolderName || null,
+        accountNumber: accountNumber || null,
+        bankName: bankName || null,
+        bankIdentifierCode: bankIdentifierCode || null,
+        branchLocation: branchLocation || null,
         preface: preface || null,
         termsAndConditions: typeof termsAndConditions === 'object' ? JSON.stringify(termsAndConditions) : (termsAndConditions || null),
         totalAmount: total,
@@ -2667,7 +2676,8 @@ app.put('/api/billing/quotations/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { 
-      quotationNumber, documentHead, subject, kindAttention, clientName, clientEmail, clientPhone, clientAddress, clientGst, clientPan, preface, termsAndConditions, totalAmount, discount, gstAmount, grandTotal, status, items, validUntil 
+      quotationNumber, documentHead, subject, kindAttention, clientName, clientEmail, clientPhone, clientAddress, clientGst, clientPan, preface, termsAndConditions, totalAmount, discount, gstAmount, grandTotal, status, items, validUntil,
+      accountHolderName, accountNumber, bankName, bankIdentifierCode, branchLocation
     } = req.body;
     const existing = await prisma.quotation.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ success: false, message: 'Quotation not found' });
@@ -2692,6 +2702,11 @@ app.put('/api/billing/quotations/:id', async (req, res) => {
         ...(clientAddress !== undefined && { clientAddress }),
         ...(clientGst !== undefined && { clientGst }),
         ...(clientPan !== undefined && { clientPan }),
+        ...(accountHolderName !== undefined && { accountHolderName }),
+        ...(accountNumber !== undefined && { accountNumber }),
+        ...(bankName !== undefined && { bankName }),
+        ...(bankIdentifierCode !== undefined && { bankIdentifierCode }),
+        ...(branchLocation !== undefined && { branchLocation }),
         ...(preface !== undefined && { preface }),
         ...(termsAndConditions !== undefined && { termsAndConditions: typeof termsAndConditions === 'object' ? JSON.stringify(termsAndConditions) : termsAndConditions }),
         ...((totalAmount !== undefined || discount !== undefined) && { totalAmount: total, discount: disc, gstAmount: gst, grandTotal: grand }),
@@ -2833,6 +2848,11 @@ app.post('/api/billing/quotations/:id/generate-bill', async (req, res) => {
         clientAddress: existing.clientAddress,
         clientGst: existing.clientGst,
         clientPan: existing.clientPan,
+        accountHolderName: existing.accountHolderName || null,
+        accountNumber: existing.accountNumber || null,
+        bankName: existing.bankName || null,
+        bankIdentifierCode: existing.bankIdentifierCode || null,
+        branchLocation: existing.branchLocation || null,
         documentHead: 'TAX INVOICE',
         subject: existing.subject,
         kindAttention: existing.kindAttention,
@@ -2891,7 +2911,7 @@ app.get('/api/billing/invoices', async (req, res) => {
       orderBy: { createdAt: 'desc' },
       include: {
         quotation: { select: { quotationNumber: true } },
-        client: { select: { id: true, name: true, email: true, phone: true } }
+        client: { select: { id: true, name: true, email: true, phone: true, accountHolderName: true, accountNumber: true, bankName: true, bankIdentifierCode: true, branchLocation: true } }
       }
     });
     return res.json({ success: true, data: invoices });
@@ -2903,7 +2923,8 @@ app.get('/api/billing/invoices', async (req, res) => {
 app.post('/api/billing/invoices', async (req, res) => {
   try {
     const { 
-      invoiceNumber, documentHead, subject, kindAttention, clientId, clientName, clientEmail, clientPhone, clientAddress, clientGst, clientPan, preface, termsAndConditions, totalAmount, discount, gstAmount, grandTotal, dueDate, items, quotationId 
+      invoiceNumber, documentHead, subject, kindAttention, clientId, clientName, clientEmail, clientPhone, clientAddress, clientGst, clientPan, preface, termsAndConditions, totalAmount, discount, gstAmount, grandTotal, dueDate, items, quotationId,
+      accountHolderName, accountNumber, bankName, bankIdentifierCode, branchLocation
     } = req.body;
 
     const total = Number(totalAmount) || 0;
@@ -2931,6 +2952,11 @@ app.post('/api/billing/invoices', async (req, res) => {
         clientAddress: clientAddress || null,
         clientGst: clientGst || null,
         clientPan: clientPan || null,
+        accountHolderName: accountHolderName || null,
+        accountNumber: accountNumber || null,
+        bankName: bankName || null,
+        bankIdentifierCode: bankIdentifierCode || null,
+        branchLocation: branchLocation || null,
         subject: subject || null,
         kindAttention: kindAttention || null,
         preface: preface || null,

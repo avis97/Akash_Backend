@@ -362,6 +362,12 @@ model Quotation {
   clientAddress      String?
   clientGst          String?
   clientPan          String?
+  // Client Bank Account Details
+  accountHolderName    String?
+  accountNumber        String?
+  bankName             String?
+  bankIdentifierCode   String?
+  branchLocation       String?
   documentHead       String?  @default("QUOTATION / PROPOSAL")
   subject            String?
   kindAttention      String?
@@ -393,6 +399,12 @@ model Invoice {
   clientAddress      String?
   clientGst          String?
   clientPan          String?
+  // Client Bank Account Details
+  accountHolderName    String?
+  accountNumber        String?
+  bankName             String?
+  bankIdentifierCode   String?
+  branchLocation       String?
   documentHead       String?       @default("TAX INVOICE")
   subject            String?
   kindAttention      String?
