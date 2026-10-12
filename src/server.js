@@ -2911,7 +2911,7 @@ app.post('/api/billing/quotations/:id/generate-bill', async (req, res) => {
 
     await logActivity(
       generatedBy || req.user?.name || 'Superadmin',
-      `Superadmin generated Tax Invoice #${generatedInvoice.invoiceNumber} for Quotation #${existing.quotationNumber} (₹${billAmount.toLocaleString()}) and deducted product quantities from Inventory.`,
+      `Superadmin generated Tax Invoice #${generatedInvoice.invoiceNumber} for Quotation #${existing.quotationNumber} (₹${(billGrand || 0).toLocaleString()}) and deducted product quantities from Inventory.`,
       'Billing & Quotations'
     );
 
