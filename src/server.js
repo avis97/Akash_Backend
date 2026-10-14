@@ -895,10 +895,10 @@ app.patch('/api/users/:id/basic-salary', async (req, res) => {
       ? Number(epfShare) 
       : Math.round(basic * 0.12);
 
-    // ESI Employee Share = custom or 0.75% of Total Gross Salary
+    // ESI Employee Share = custom or 0.75% of (Basic + Others 1)
     const esi = esiShare !== undefined && esiShare !== null && !isNaN(Number(esiShare)) 
       ? Number(esiShare) 
-      : Math.round(grossSalary * 0.0075);
+      : Math.round((basic + o1) * 0.0075);
 
     // P TAX = entered or default 110
     const pt = pTax !== undefined && pTax !== null && !isNaN(Number(pTax)) ? Number(pTax) : 110;
@@ -2032,7 +2032,7 @@ app.get('/api/attendance/monthly-report', async (req, res) => {
       const allow = user.totalAllowances || salRecord?.allowances || (o1 + o2 + o3 + o4);
       const gross = user.grossSalary || salRecord?.grossSalary || (base + allow);
       const epf = user.epfShare || salRecord?.pfDeduction || Math.round(base * 0.12);
-      const esi = user.esiShare || salRecord?.esiDeduction || Math.round(gross * 0.0075);
+      const esi = user.esiShare || salRecord?.esiDeduction || Math.round((base + o1) * 0.0075);
       const pt = user.pTax || salRecord?.pTaxDeduction || 110;
       const roundedOtRate = calculateRoundedOtHourlyRate(totalMonthlyComp);
       const otPay = Math.round(otHours * roundedOtRate);
@@ -2128,7 +2128,7 @@ app.post('/api/payroll/generate-batch', async (req, res) => {
       const totalOtPay = Math.round(otHours * roundedOtRate);
 
       const epf = user.epfShare || Math.round(base * 0.12);
-      const esi = user.esiShare || Math.round(gross * 0.0075);
+      const esi = user.esiShare || Math.round((base + o1) * 0.0075);
       const pt = user.pTax || 110;
       const totalDed = epf + esi + pt + lateDeduction;
       const net = gross + totalOtPay - totalDed;
@@ -4411,10 +4411,11 @@ function calculatePayrollEngine(input, config, prevRecord) {
     ? Number(input.epfShare)
     : Math.round(basic * (config?.epfPercent || 12) / 100);
 
-  // Rule (k): ESI = grossBase * 0.75%
+  // Rule (k): ESI = (basic + others1) * 0.75%
+  const esiWage = basic + o1;
   const esiDeduction = input.esiShare !== undefined && input.esiShare !== null && input.esiShare !== ''
     ? Number(input.esiShare)
-    : Math.round(grossBase * (config?.esiPercent || 0.75) / 100);
+    : Math.round(esiWage * (config?.esiPercent || 0.75) / 100);
 
   // Rule (l): Professional Tax
   let pTaxDeduction = 0;
