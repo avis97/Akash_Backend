@@ -719,7 +719,7 @@ async function handleCreateUserOrEmployee(req, res) {
         email,
         password: hashedPassword,
         phone: phone || null,
-        designation: designation || (assignedRole === 'CLIENT' ? 'Client Representative' : 'Staff Member'),
+        designation: (assignedRole === 'CLIENT' || assignedRole === 'USER') ? '' : (designation || 'Staff Member'),
         role: assignedRole,
         isMfaEnabled: false,
         avatarUrl: `https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150`,
@@ -749,20 +749,27 @@ async function handleCreateUserOrEmployee(req, res) {
 
     await logActivity(req.user?.name || 'Superadmin', `Created employee account (${finalEmployeeId}): ${name} (${email})`, 'User Management');
 
-    // Send email notification with login credentials (configured via vs.backup25@gmail.com)
+    // Send email notification with login credentials ONLY when creating an EMPLOYEE account
     let emailStatus = null;
-    try {
-      emailStatus = await sendAccountCredentialsEmail({
-        name: newUser.name,
-        email: newUser.email,
-        password: plainPassword,
-        role: newUser.role,
-        employeeId: newUser.employeeId,
-        designation: newUser.designation
-      });
-    } catch (mailErr) {
-      console.warn('Failed to dispatch welcome email:', mailErr.message);
-      emailStatus = { success: false, error: mailErr.message };
+    const isEmployee = assignedRole === 'EMPLOYEE';
+    if (isEmployee) {
+      try {
+        emailStatus = await sendAccountCredentialsEmail({
+          name: newUser.name,
+          email: newUser.email,
+          password: plainPassword,
+          role: newUser.role,
+          employeeId: newUser.employeeId,
+          designation: newUser.designation,
+          phone: newUser.phone,
+          branch: newUser.branch,
+          department: newUser.department,
+          dateOfJoining: newUser.dateOfJoining
+        });
+      } catch (mailErr) {
+        console.warn('Failed to dispatch welcome email:', mailErr.message);
+        emailStatus = { success: false, error: mailErr.message };
+      }
     }
 
     return res.status(201).json({
@@ -818,7 +825,7 @@ app.put('/api/users/:id', authenticateToken, requireSuperAdmin, async (req, res)
       ...(name && { name }),
       ...(email && { email }),
       ...(phone !== undefined && { phone }),
-      ...(designation && { designation }),
+      ...((role === 'CLIENT' || role === 'USER' || existingUser.role === 'CLIENT' || existingUser.role === 'USER') ? { designation: '' } : designation ? { designation } : {}),
       ...(role && { role }),
       ...(avatarUrl !== undefined && { avatarUrl }),
       ...(employeeId !== undefined && { employeeId }),

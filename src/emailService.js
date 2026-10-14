@@ -6,7 +6,7 @@ const EMAIL_FROM = process.env.EMAIL_FROM || `Akash Engineering <${SMTP_USER}>`;
 
 function getSmtpConfig() {
   const user = process.env.SMTP_USER || SMTP_USER;
-  const pass = (process.env.SMTP_PASS || '').replace(/\s+/g, '');
+  const pass = (process.env.SMTP_PASS || '').replace(/["'\s]/g, '');
   const host = process.env.SMTP_HOST || 'smtp.gmail.com';
   const port = Number(process.env.SMTP_PORT) || 587;
   const from = process.env.EMAIL_FROM || `Akash Engineering <${user}>`;
@@ -34,14 +34,23 @@ function createTransporter() {
 }
 
 /**
- * Send welcome email with login credentials when Employee or Client account is created.
+ * Send welcome email with login credentials and normal employee onboarding details.
  */
-async function sendAccountCredentialsEmail({ name, email, password, role, employeeId, designation }) {
+async function sendAccountCredentialsEmail({
+  name,
+  email,
+  password,
+  role = 'EMPLOYEE',
+  employeeId,
+  designation,
+  branch,
+  department,
+  dateOfJoining,
+  phone
+}) {
   if (!email) return { success: false, message: 'Recipient email is missing' };
 
-  const isClient = role === 'CLIENT' || role === 'USER';
-  const roleLabel = isClient ? 'Client Portal' : 'Employee Staff Portal';
-  const subject = `Welcome to Akash Engineering - Your ${roleLabel} Account Credentials`;
+  const subject = `Welcome to Akash Engineering - Your Employee Login Credentials`;
 
   const htmlContent = `
     <!DOCTYPE html>
@@ -74,16 +83,16 @@ async function sendAccountCredentialsEmail({ name, email, password, role, employ
           <p>Engineers, Contractors & General Order Suppliers</p>
         </div>
         <div class="content">
-          <div class="greeting">Hello ${name || 'User'},</div>
+          <div class="greeting">Hello ${name || 'Staff Member'},</div>
           <div class="text">
-            Your account has been officially registered on the <strong>Akash Engineering Enterprise Management Portal</strong> as a <strong>${role || 'User'}</strong>.
-            You can now log in using the credentials generated below:
+            Your employee staff account has been officially created on the <strong>Akash Engineering Enterprise Management Portal</strong>.
+            Below are your official employee details and login credentials:
           </div>
 
           <div class="card">
             <div class="card-row">
-              <span class="card-label">Assigned Role:</span>
-              <span class="card-val" style="color: #2563eb;">${role || 'EMPLOYEE'}</span>
+              <span class="card-label">Employee Name:</span>
+              <span class="card-val">${name}</span>
             </div>
             ${employeeId ? `
             <div class="card-row">
@@ -97,12 +106,36 @@ async function sendAccountCredentialsEmail({ name, email, password, role, employ
               <span class="card-val">${designation}</span>
             </div>
             ` : ''}
+            ${branch ? `
             <div class="card-row">
-              <span class="card-label">Username (Email):</span>
-              <span class="card-val">${email}</span>
+              <span class="card-label">Branch Office:</span>
+              <span class="card-val">${branch}</span>
+            </div>
+            ` : ''}
+            ${department ? `
+            <div class="card-row">
+              <span class="card-label">Department:</span>
+              <span class="card-val">${department}</span>
+            </div>
+            ` : ''}
+            ${dateOfJoining ? `
+            <div class="card-row">
+              <span class="card-label">Date of Joining:</span>
+              <span class="card-val">${dateOfJoining}</span>
+            </div>
+            ` : ''}
+            ${phone ? `
+            <div class="card-row">
+              <span class="card-label">Contact Phone:</span>
+              <span class="card-val">${phone}</span>
+            </div>
+            ` : ''}
+            <div class="card-row" style="border-top: 1px dashed #cbd5e1; padding-top: 10px; margin-top: 10px;">
+              <span class="card-label">Username (Login Email):</span>
+              <span class="card-val" style="color: #2563eb;">${email}</span>
             </div>
             <div class="card-row">
-              <span class="card-label">Temporary Password:</span>
+              <span class="card-label">Account Password:</span>
               <span class="card-val" style="color: #dc2626; background: #fee2e2; padding: 2px 8px; border-radius: 4px;">${password}</span>
             </div>
           </div>
@@ -112,7 +145,7 @@ async function sendAccountCredentialsEmail({ name, email, password, role, employ
           </div>
 
           <div class="btn-wrap">
-            <a href="http://localhost:5173" class="btn" target="_blank">Access Portal Login</a>
+            <a href="http://localhost:3000" class="btn" target="_blank">Access Portal Login</a>
           </div>
         </div>
         <div class="footer">
@@ -125,7 +158,16 @@ async function sendAccountCredentialsEmail({ name, email, password, role, employ
     </html>
   `;
 
-  const textContent = `Welcome to Akash Engineering\n\nHello ${name},\nYour account has been created on the Akash Engineering Enterprise Portal.\n\nRole: ${role}\n${employeeId ? `Employee ID: ${employeeId}\n` : ''}Username (Email): ${email}\nPassword: ${password}\n\nPlease log in at http://localhost:5173`;
+  const textContent = `Welcome to Akash Engineering\n\nHello ${name},\nYour employee staff account has been created on the Akash Engineering Enterprise Portal.\n\n` +
+    `Employee ID: ${employeeId || '-'}\n` +
+    `Designation: ${designation || '-'}\n` +
+    `Branch: ${branch || '-'}\n` +
+    `Department: ${department || '-'}\n` +
+    `Joining Date: ${dateOfJoining || '-'}\n` +
+    `Contact Phone: ${phone || '-'}\n\n` +
+    `Username (Email): ${email}\n` +
+    `Password: ${password}\n\n` +
+    `Portal URL: http://localhost:3000`;
 
   const transporter = createTransporter();
   if (!transporter) {
