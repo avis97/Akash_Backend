@@ -1446,6 +1446,21 @@ app.get('/api/attendance', async (req, res) => {
   }
 });
 
+// Helper to test if a check-in time string is after 10:00 AM (Late Entry)
+// Office Clock-In: 9:30 AM to 10:00 AM. Last time of clock in is 10:00 AM.
+function isPunchTimeLate(timeStr) {
+  if (!timeStr) return false;
+  const match = timeStr.trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$/i);
+  if (!match) return false;
+  let hours = parseInt(match[1], 10);
+  const minutes = parseInt(match[2], 10);
+  const seconds = match[3] ? parseInt(match[3], 10) : 0;
+  const meridiem = match[4]?.toUpperCase();
+  if (meridiem === 'PM' && hours < 12) hours += 12;
+  if (meridiem === 'AM' && hours === 12) hours = 0;
+  return hours > 10 || (hours === 10 && (minutes > 0 || seconds > 0));
+}
+
 app.post('/api/attendance/check-in', async (req, res) => {
   try {
     const { userId, userName, location, method, latitude, longitude } = req.body;
@@ -1493,10 +1508,20 @@ app.post('/api/attendance/check-in', async (req, res) => {
       });
     }
 
-    // Evaluate isLate in IST timezone (Late after 10:00 AM IST)
-    const istHours = parseInt(now.toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour: '2-digit', hour12: false }), 10);
-    const istMinutes = parseInt(now.toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', minute: '2-digit' }), 10);
-    const isLate = istHours > 10 || (istHours === 10 && istMinutes > 0);
+    // Office clock in time: 9:30 AM to 10:00 AM. Last time of clock in is 10:00 AM.
+    // Clock in after 10:00 AM is counted as late entry (3 late entries = 1 absent deduction from salary).
+    const timeParts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Kolkata',
+      hour: 'numeric',
+      minute: 'numeric',
+      second: 'numeric',
+      hour12: false
+    }).formatToParts(now);
+    const istHours = parseInt(timeParts.find(p => p.type === 'hour')?.value || '0', 10);
+    const istMinutes = parseInt(timeParts.find(p => p.type === 'minute')?.value || '0', 10);
+    const istSeconds = parseInt(timeParts.find(p => p.type === 'second')?.value || '0', 10);
+
+    const isLate = istHours > 10 || (istHours === 10 && (istMinutes > 0 || istSeconds > 0));
     const status = isLate ? 'LATE' : 'PRESENT';
 
     let finalLocation = location;
@@ -1569,8 +1594,16 @@ app.post('/api/attendance/check-in', async (req, res) => {
       }
     }
 
-    await logActivity(newAtt.userName, `Checked in (${status}) at ${timeStr} via ${method} at ${finalLocation}`, 'Attendance');
-    return res.status(201).json({ success: true, data: newAtt, message: `Check-In Successful at ${timeStr} (${status})` });
+    const timingNote = isLate
+      ? `Late Entry (Clock-in after 10:00 AM cutoff. Policy: 3 late entries = 1 absent deduction)`
+      : `On Time (Within 9:30 AM - 10:00 AM office clock-in window)`;
+    await logActivity(newAtt.userName, `Checked in (${status}) at ${timeStr} via ${method} at ${finalLocation} [${timingNote}]`, 'Attendance');
+    return res.status(201).json({
+      success: true,
+      data: newAtt,
+      isLate,
+      message: `Check-In Recorded at ${timeStr} (${timingNote})`
+    });
   } catch (err) {
     console.error('Check-in error:', err);
     return res.status(500).json({ success: false, message: err.message });
@@ -2016,8 +2049,8 @@ app.get('/api/attendance/monthly-report', async (req, res) => {
 
     const report = users.map(user => {
       const userAtt = allAtt.filter(a => a.userId === user.id || (user.name && a.userName?.toLowerCase() === user.name.toLowerCase()));
-      const presentCount = userAtt.filter(a => a.status === 'PRESENT').length;
-      const lateCount = userAtt.filter(a => a.status === 'LATE').length;
+      const lateCount = userAtt.filter(a => a.status === 'LATE' || a.status === 'Late' || isPunchTimeLate(a.checkInTime)).length;
+      const presentCount = userAtt.filter(a => a.status === 'PRESENT' && !isPunchTimeLate(a.checkInTime)).length;
       const totalLogged = presentCount + lateCount;
       const otHours = calculateHourlyOtFromLogs(userAtt);
       const userLeaves = allLeaves.filter(l => (l.userId === user.id || (user.name && l.userName?.toLowerCase() === user.name.toLowerCase())) && l.status === 'APPROVED').length;
@@ -2029,6 +2062,7 @@ app.get('/api/attendance/monthly-report', async (req, res) => {
       const o3 = user.others3 || salRecord?.others3 || 0;
       const o4 = user.others4 || salRecord?.others4 || 0;
       const totalMonthlyComp = base + o1 + o2 + o3 + o4;
+      const dailyRate = totalMonthlyComp > 0 ? (totalMonthlyComp / 30) : 0;
       const allow = user.totalAllowances || salRecord?.allowances || (o1 + o2 + o3 + o4);
       const gross = user.grossSalary || salRecord?.grossSalary || (base + allow);
       const epf = user.epfShare || salRecord?.pfDeduction || Math.round(base * 0.12);
@@ -2037,7 +2071,12 @@ app.get('/api/attendance/monthly-report', async (req, res) => {
       const roundedOtRate = calculateRoundedOtHourlyRate(totalMonthlyComp);
       const otPay = Math.round(otHours * roundedOtRate);
 
-      const net = user.netTakeHome || salRecord?.netSalary || (gross + otPay - epf - esi - pt);
+      const lateAbsentDeductionDays = Math.floor(lateCount / 3);
+      const lateDeductionPay = Math.round(lateAbsentDeductionDays * dailyRate);
+      const absentDays = Math.max(0, 22 - totalLogged - userLeaves);
+      const absentDeductionPay = Math.round(absentDays * dailyRate);
+
+      const net = user.netTakeHome || salRecord?.netSalary || (gross + otPay - epf - esi - pt - lateDeductionPay);
 
       return {
         userId: user.id,
@@ -2049,8 +2088,10 @@ app.get('/api/attendance/monthly-report', async (req, res) => {
         totalWorkingDays: 22,
         presentDays: totalLogged,
         lateEntries: lateCount,
-        lateAbsentDeductionDays: Math.floor(lateCount / 3),
-        absentDays: Math.max(0, 22 - totalLogged - userLeaves),
+        lateAbsentDeductionDays,
+        lateDeductionPay,
+        absentDays,
+        absentDeductionPay,
         approvedLeaves: userLeaves,
         overtimeHours: otHours,
         roundedOtRate,
@@ -2107,7 +2148,7 @@ app.post('/api/payroll/generate-batch', async (req, res) => {
       const userAtt = await prisma.attendanceLog.findMany({
         where: { userId: user.id }
       });
-      const lateCount = userAtt.filter(a => a.status === 'LATE' || a.status === 'Late').length;
+      const lateCount = userAtt.filter(a => a.status === 'LATE' || a.status === 'Late' || isPunchTimeLate(a.checkInTime)).length;
       const base = Number(user.basicSalary) || 0;
       const o1 = Number(user.others1) || 0;
       const o2 = Number(user.others2) || 0;
@@ -2118,9 +2159,14 @@ app.post('/api/payroll/generate-batch', async (req, res) => {
       const allow = user.totalAllowances || (o1 + o2 + o3 + o4);
       const gross = user.grossSalary || (base + allow);
 
-      // Late deduction: 1 absent per 3 late entries
+      // Late deduction: 1 absent per 3 late entries (Clock-in after 10:00 AM)
       const lateAbsentDays = Math.floor(lateCount / 3);
       const lateDeduction = Math.round(lateAbsentDays * dailyRate);
+
+      // General absent days
+      const loggedPresent = userAtt.filter(a => a.status === 'PRESENT' || a.status === 'LATE' || a.status === 'Late' || a.checkInTime).length;
+      const absentDays = Math.max(0, 30 - loggedPresent);
+      const absentDeduction = Math.round(absentDays * dailyRate);
 
       // OT Calculation
       const otHours = calculateHourlyOtFromLogs(userAtt);
@@ -2130,7 +2176,7 @@ app.post('/api/payroll/generate-batch', async (req, res) => {
       const epf = user.epfShare || Math.round(base * 0.12);
       const esi = user.esiShare || Math.round((base + o1) * 0.0075);
       const pt = user.pTax || 110;
-      const totalDed = epf + esi + pt + lateDeduction;
+      const totalDed = epf + esi + pt + absentDeduction + lateDeduction;
       const net = gross + totalOtPay - totalDed;
 
       // Check existing salary record
@@ -4432,9 +4478,17 @@ function calculatePayrollEngine(input, config, prevRecord) {
   const bonusEnabled = Boolean(input.bonusEnabled);
   const bonusAmount = bonusEnabled ? Math.round(basic * (config?.bonusPercent || 8.33) / 100) : 0;
 
-  // Earnings & Deductions totals
+  // Late Entries Deduction:
+  // Office Clock-In: 9:30 AM to 10:00 AM. Last time of clock in is 10:00 AM.
+  // Clock in after 10 AM is late entry.
+  // 3 late entries during a month = 1 absent deduction from salary.
+  const rawLateEntries = Number(input.lateEntries) || 0;
+  const lateAbsentDays = Math.floor(rawLateEntries / 3);
+  const lateDeductionPay = Math.round(lateAbsentDays * dailyRate);
+
+  // Earnings & Deductions totals (deductions include general absent days + late entry absent days)
   const grossSalary = grossBase + overtimeDaysPay + overtimePay + bonusAmount;
-  const totalDeductions = absentDeductionPay + advanceDeducted + epfDeduction + esiDeduction + pTaxDeduction;
+  const totalDeductions = Math.round(absentDeductionPay + lateDeductionPay + advanceDeducted + epfDeduction + esiDeduction + pTaxDeduction);
 
   // Rule (m) & (n): Net Take Home Salary
   const netSalary = Math.round(grossSalary - totalDeductions);
@@ -4454,6 +4508,9 @@ function calculatePayrollEngine(input, config, prevRecord) {
     overtimeDays: rawOtDays,
     overtimeDaysPay,
     absentDays: rawAbsentDays,
+    lateEntries: rawLateEntries,
+    lateAbsentDays,
+    lateDeductionPay,
     netAbsentDays,
     netOvertimeDays: netOtDays,
     prevLeaveBalance,
@@ -4585,11 +4642,17 @@ app.get('/api/payroll/previous-month-data', async (req, res) => {
 
       let presentCount = 0;
       let explicitAbsentCount = 0;
+      let lateCount = 0;
 
       for (const log of logs) {
+        const isLateLog = log.status === 'LATE' || log.status === 'Late' || (log.checkInTime && isPunchTimeLate(log.checkInTime));
+        if (isLateLog) {
+          lateCount += 1;
+        }
+
         if (log.status === 'ABSENT' || log.status === 'Absent') {
           explicitAbsentCount += 1;
-        } else if (log.status === 'PRESENT' || log.status === 'LATE' || log.status === 'ON_DUTY' || log.checkInTime) {
+        } else if (log.status === 'PRESENT' || log.status === 'LATE' || log.status === 'Late' || log.status === 'ON_DUTY' || log.checkInTime) {
           presentCount += 1;
         }
 
@@ -4627,6 +4690,8 @@ app.get('/api/payroll/previous-month-data', async (req, res) => {
       autoOtHours: Math.round(autoOtHours * 10) / 10,
       autoOtDays,
       autoAbsentDays,
+      autoLateEntries: lateCount,
+      autoLateAbsentDays: Math.floor(lateCount / 3),
       lastRecord
     });
   } catch (err) {
@@ -4690,6 +4755,9 @@ app.post('/api/payroll', async (req, res) => {
     });
 
     const computed = calculatePayrollEngine(req.body, config, prevRecord);
+    const { lateEntries, lateAbsentDays, lateDeductionPay, ...prismaData } = computed;
+    const totalAbsentDeduction = (computed.absentDeductionPay || 0) + (computed.lateDeductionPay || 0);
+    prismaData.absentDeductionPay = totalAbsentDeduction;
 
     const yearNum = Number(year) || new Date().getFullYear();
     const monthStr = month || 'September';
@@ -4705,7 +4773,7 @@ app.post('/api/payroll', async (req, res) => {
         where: { id: existing.id },
         data: {
           userName: user.name,
-          ...computed,
+          ...prismaData,
           status: 'PROCESSED',
           generatedAt: new Date()
         }
@@ -4717,14 +4785,18 @@ app.post('/api/payroll', async (req, res) => {
           userName: user.name,
           month: monthStr,
           year: yearNum,
-          ...computed,
+          ...prismaData,
           status: 'PROCESSED'
         }
       });
     }
 
     await logActivity('HR Admin', `Generated salary slip for ${user.name} (${monthStr} ${yearNum})`, 'Salary Management');
-    return res.json({ success: true, message: `Payslip for ${user.name} processed successfully!`, data: record });
+    return res.json({
+      success: true,
+      message: `Payslip for ${user.name} processed successfully!`,
+      data: { ...record, lateEntries, lateAbsentDays, lateDeductionPay }
+    });
   } catch (err) {
     console.error('Error generating payroll:', err);
     return res.status(500).json({ success: false, message: err.message });
@@ -4745,19 +4817,22 @@ app.put('/api/payroll/:id', async (req, res) => {
     });
 
     const computed = calculatePayrollEngine({ ...existing, ...req.body }, config, prevRecord);
+    const { lateEntries, lateAbsentDays, lateDeductionPay, ...prismaData } = computed;
+    const totalAbsentDeduction = (computed.absentDeductionPay || 0) + (computed.lateDeductionPay || 0);
+    prismaData.absentDeductionPay = totalAbsentDeduction;
 
     const updated = await prisma.salaryRecord.update({
       where: { id },
       data: {
         ...(req.body.month && { month: req.body.month }),
         ...(req.body.year && { year: Number(req.body.year) }),
-        ...computed,
+        ...prismaData,
         ...(req.body.status && { status: req.body.status })
       }
     });
 
     await logActivity('HR Admin', `Updated payroll record #${id}`, 'Salary Management');
-    return res.json({ success: true, data: updated });
+    return res.json({ success: true, data: { ...updated, lateEntries, lateAbsentDays, lateDeductionPay } });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
