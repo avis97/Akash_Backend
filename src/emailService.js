@@ -1,5 +1,6 @@
 require('dotenv').config();
 const nodemailer = require('nodemailer');
+const { generateQuotationPdfBuffer } = require('./quotationPdfService');
 
 const SMTP_USER = process.env.SMTP_USER || 'vs.backup25@gmail.com';
 const EMAIL_FROM = process.env.EMAIL_FROM || `Akash Engineering <${SMTP_USER}>`;
@@ -201,8 +202,13 @@ async function sendAccountCredentialsEmail({
  */
 async function sendQuotationEmail({
   quotationNumber,
+  documentHead,
   clientName,
   clientEmail,
+  clientPhone,
+  clientAddress,
+  clientGst,
+  clientPan,
   subject,
   kindAttention,
   items,
@@ -212,6 +218,7 @@ async function sendQuotationEmail({
   grandTotal,
   validUntil,
   preface,
+  termsAndConditions,
   bankDetails
 }) {
   if (!clientEmail) return { success: false, message: 'Client email is missing' };
@@ -349,6 +356,18 @@ async function sendQuotationEmail({
             </div>
           ` : ''}
 
+          <!-- PDF Attachment Callout -->
+          <div style="background: #eff6ff; border: 1.5px dashed #3b82f6; border-radius: 8px; padding: 12px 18px; margin: 18px 0;">
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+              <div>
+                <strong style="color: #1e40af; font-size: 13px;">📎 Official Quotation PDF Attached</strong>
+                <div style="font-size: 11.5px; color: #475569; margin-top: 3px;">
+                  The complete official PDF document with letterhead, itemized technical schedule, bank details, and terms has been generated and attached to this email.
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div style="font-size: 12px; color: #64748b; margin-top: 15px; line-height: 1.5;">
             Thank you for considering Akash Engineering. Please let us know if you have any questions or wish to proceed with work order confirmation.
           </div>
@@ -364,37 +383,80 @@ async function sendQuotationEmail({
     </html>
   `;
 
-  const textContent = `AKASH ENGINEERING - QUOTATION #${quotationNumber}\n\nClient: ${clientName}\nSubject: ${subject}\nValid Until: ${validUntilStr}\nGrand Total: ₹${Number(grandTotal || 0).toLocaleString()}\n\nPlease review your quotation proposal.`;
+  const textContent = `AKASH ENGINEERING - QUOTATION #${quotationNumber}\n\nClient: ${clientName}\nSubject: ${subject || 'Commercial Proposal'}\nValid Until: ${validUntilStr}\nGrand Total: Rs. ${Number(grandTotal || 0).toLocaleString()}\n\nATTACHED FILE: The official PDF Quotation document (Quotation_${(quotationNumber || 'Doc').replace(/[\/\\]/g, '_')}.pdf) is attached with this email.\n\nPlease review your quotation proposal.`;
+
+  // Generate official PDF buffer
+  let pdfAttachment = null;
+  try {
+    const pdfBuffer = await generateQuotationPdfBuffer({
+      quotationNumber,
+      documentHead,
+      clientName,
+      clientEmail,
+      clientPhone,
+      clientAddress,
+      clientGst,
+      clientPan,
+      subject,
+      kindAttention,
+      items: parsedItems,
+      totalAmount,
+      discount,
+      gstAmount,
+      grandTotal,
+      validUntil,
+      preface,
+      termsAndConditions,
+      bankDetails
+    });
+
+    const safeFilename = `Quotation_${(quotationNumber || 'Document').replace(/[\/\\?%*:|"<>]/g, '_')}.pdf`;
+    pdfAttachment = {
+      filename: safeFilename,
+      content: pdfBuffer,
+      contentType: 'application/pdf'
+    };
+  } catch (pdfErr) {
+    console.error('[Email Service] Error generating quotation PDF attachment:', pdfErr);
+  }
 
   const transporter = createTransporter();
   if (!transporter) {
-    console.log(`[Email Service Notice] SMTP_PASS is empty in .env. Simulated quotation email for ${clientEmail} (Quotation #${quotationNumber}, Amount ₹${grandTotal})`);
+    console.log(`[Email Service Notice] SMTP_PASS is empty in .env. Simulated quotation email with PDF attachment for ${clientEmail} (Quotation #${quotationNumber}, Amount Rs. ${grandTotal})`);
     return {
       success: true,
       delivered: false,
       simulated: true,
+      hasPdfAttachment: Boolean(pdfAttachment),
       message: `Quotation created. Email dispatch configured for ${SMTP_USER} (set SMTP_PASS in .env for live dispatch).`
     };
   }
 
   try {
-    const info = await transporter.sendMail({
+    const mailOptions = {
       from: EMAIL_FROM,
       to: clientEmail,
       subject: mailSubject,
       text: textContent,
       html: htmlContent
-    });
-    console.log(`[Email Service] Quotation email sent successfully to ${clientEmail}. MessageId: ${info.messageId}`);
-    return { success: true, delivered: true, messageId: info.messageId };
+    };
+
+    if (pdfAttachment) {
+      mailOptions.attachments = [pdfAttachment];
+    }
+
+    const info = await transporter.sendMail(mailOptions);
+    console.log(`[Email Service] Quotation email with PDF attachment sent successfully to ${clientEmail}. MessageId: ${info.messageId}`);
+    return { success: true, delivered: true, messageId: info.messageId, hasPdfAttachment: Boolean(pdfAttachment) };
   } catch (err) {
     console.error(`[Email Service Error] Failed to send quotation email to ${clientEmail}:`, err.message);
-    return { success: false, delivered: false, error: err.message };
+    return { success: false, delivered: false, error: err.message, hasPdfAttachment: Boolean(pdfAttachment) };
   }
 }
 
 module.exports = {
   sendAccountCredentialsEmail,
   sendQuotationEmail,
+  generateQuotationPdfBuffer,
   SMTP_USER
 };

@@ -4,7 +4,7 @@ const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { PrismaClient } = require('@prisma/client');
-const { sendAccountCredentialsEmail, sendQuotationEmail, SMTP_USER } = require('./emailService');
+const { sendAccountCredentialsEmail, sendQuotationEmail, generateQuotationPdfBuffer, SMTP_USER } = require('./emailService');
 
 const app = express();
 const PORT = process.env.PORT || 5005;
@@ -2816,13 +2816,18 @@ app.post('/api/billing/quotations', async (req, res) => {
 
     await logActivity('Superadmin', `Created and sent quotation #${newQ.quotationNumber} to Client ${clientName}`, 'Billing & Quotations');
 
-    // Dispatch quotation details email to client (configured via vs.backup25@gmail.com)
+    // Dispatch quotation details email with official PDF attachment to client
     let emailStatus = null;
     try {
       emailStatus = await sendQuotationEmail({
         quotationNumber: newQ.quotationNumber,
+        documentHead: newQ.documentHead,
         clientName: newQ.clientName,
         clientEmail: newQ.clientEmail,
+        clientPhone: newQ.clientPhone,
+        clientAddress: newQ.clientAddress,
+        clientGst: newQ.clientGst,
+        clientPan: newQ.clientPan,
         subject: newQ.subject,
         kindAttention: newQ.kindAttention,
         items: items,
@@ -2832,6 +2837,7 @@ app.post('/api/billing/quotations', async (req, res) => {
         grandTotal: grand,
         validUntil: newQ.validUntil,
         preface: newQ.preface,
+        termsAndConditions: newQ.termsAndConditions,
         bankDetails: {
           bankName: newQ.bankName,
           accountNumber: newQ.accountNumber,
@@ -3106,6 +3112,110 @@ app.post('/api/billing/quotations/:id/generate-bill', async (req, res) => {
   } catch (err) {
     console.error('Error generating bill from quotation:', err);
     return res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
+  }
+});
+
+// Send or resend Quotation email with attached PDF
+app.post('/api/billing/quotations/:id/send-email', async (req, res) => {
+  try {
+    const q = await prisma.quotation.findUnique({ where: { id: req.params.id } });
+    if (!q) return res.status(404).json({ success: false, message: 'Quotation not found' });
+    if (!q.clientEmail) return res.status(400).json({ success: false, message: 'Client email is not available on this quotation' });
+
+    let items = [];
+    try {
+      items = q.itemsJson ? JSON.parse(q.itemsJson) : [];
+    } catch (e) {
+      items = [];
+    }
+
+    const emailStatus = await sendQuotationEmail({
+      quotationNumber: q.quotationNumber,
+      documentHead: q.documentHead,
+      clientName: q.clientName,
+      clientEmail: q.clientEmail,
+      clientPhone: q.clientPhone,
+      clientAddress: q.clientAddress,
+      clientGst: q.clientGst,
+      clientPan: q.clientPan,
+      subject: q.subject,
+      kindAttention: q.kindAttention,
+      items,
+      totalAmount: q.totalAmount,
+      discount: q.discount,
+      gstAmount: q.gstAmount,
+      grandTotal: q.grandTotal,
+      validUntil: q.validUntil,
+      preface: q.preface,
+      termsAndConditions: q.termsAndConditions,
+      bankDetails: {
+        bankName: q.bankName,
+        accountNumber: q.accountNumber,
+        bankIdentifierCode: q.bankIdentifierCode,
+        accountHolderName: q.accountHolderName,
+        branchLocation: q.branchLocation
+      }
+    });
+
+    return res.json({
+      success: true,
+      message: `Official Quotation #${q.quotationNumber} PDF sent to ${q.clientEmail}`,
+      emailStatus
+    });
+  } catch (err) {
+    console.error('Error emailing quotation PDF:', err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Download official Quotation PDF directly from backend
+app.get('/api/billing/quotations/:id/pdf', async (req, res) => {
+  try {
+    const q = await prisma.quotation.findUnique({ where: { id: req.params.id } });
+    if (!q) return res.status(404).json({ success: false, message: 'Quotation not found' });
+
+    let items = [];
+    try {
+      items = q.itemsJson ? JSON.parse(q.itemsJson) : [];
+    } catch (e) {
+      items = [];
+    }
+
+    const pdfBuffer = await generateQuotationPdfBuffer({
+      quotationNumber: q.quotationNumber,
+      documentHead: q.documentHead,
+      clientName: q.clientName,
+      clientEmail: q.clientEmail,
+      clientPhone: q.clientPhone,
+      clientAddress: q.clientAddress,
+      clientGst: q.clientGst,
+      clientPan: q.clientPan,
+      subject: q.subject,
+      kindAttention: q.kindAttention,
+      items,
+      totalAmount: q.totalAmount,
+      discount: q.discount,
+      gstAmount: q.gstAmount,
+      grandTotal: q.grandTotal,
+      validUntil: q.validUntil,
+      preface: q.preface,
+      termsAndConditions: q.termsAndConditions,
+      bankDetails: {
+        bankName: q.bankName,
+        accountNumber: q.accountNumber,
+        bankIdentifierCode: q.bankIdentifierCode,
+        accountHolderName: q.accountHolderName,
+        branchLocation: q.branchLocation
+      }
+    });
+
+    const safeFilename = `Quotation_${(q.quotationNumber || 'Document').replace(/[\/\\?%*:|"<>]/g, '_')}.pdf`;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"`);
+    return res.send(pdfBuffer);
+  } catch (err) {
+    console.error('Error generating quotation PDF download:', err);
+    return res.status(500).json({ success: false, message: err.message });
   }
 });
 
