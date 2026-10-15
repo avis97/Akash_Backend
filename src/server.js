@@ -1360,16 +1360,21 @@ const backendAddressCache = new Map();
 
 async function reverseGeocodeBackend(lat, lng) {
   if (!lat || !lng) return null;
-  const cacheKey = `${Number(lat).toFixed(4)},${Number(lng).toFixed(4)}`;
+  const numLat = Number(lat);
+  const numLng = Number(lng);
+  if (isNaN(numLat) || isNaN(numLng)) return null;
+
+  const cacheKey = `${numLat.toFixed(4)},${numLng.toFixed(4)}`;
   if (backendAddressCache.has(cacheKey)) {
     return backendAddressCache.get(cacheKey);
   }
 
+  // 1. OpenStreetMap Nominatim with 4s timeout
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 4000);
     const response = await fetch(
-      `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`,
+      `https://nominatim.openstreetmap.org/reverse?format=json&lat=${numLat}&lon=${numLng}`,
       {
         headers: { 'User-Agent': 'Akash_ER_App/1.0 (contact@vsdigitech.com)' },
         signal: controller.signal
@@ -1381,14 +1386,24 @@ async function reverseGeocodeBackend(lat, lng) {
       const data = await response.json();
       if (data && data.address) {
         const a = data.address;
-        const mainLocation = a.building || a.amenity || a.road || a.neighbourhood || a.suburb;
+        const building = a.building || a.amenity || a.office || a.shop || a.house_name;
+        const road = [a.house_number, a.road].filter(Boolean).join(' ') || a.street;
+        const neighbourhood = a.neighbourhood || a.subdistrict || a.residential;
+        const suburb = a.suburb || a.city_district;
+        const city = a.city || a.town || a.village || a.county;
+        const state = a.state;
+        const postcode = a.postcode;
+
         const parts = [
-          mainLocation,
-          a.suburb !== mainLocation ? a.suburb : null,
-          a.city || a.town || a.village || a.county,
-          a.state,
-          a.postcode
+          building,
+          road,
+          neighbourhood,
+          suburb !== neighbourhood ? suburb : null,
+          city !== suburb ? city : null,
+          state,
+          postcode
         ].filter(Boolean);
+
         const cleanParts = parts.filter((item, index) => parts.indexOf(item) === index);
         const formattedAddress = cleanParts.join(', ');
 
@@ -1403,9 +1418,35 @@ async function reverseGeocodeBackend(lat, lng) {
       }
     }
   } catch (err) {
-    console.warn('Backend reverse geocode notice:', err.message);
+    console.warn('Backend Nominatim reverse geocode notice:', err.message);
   }
-  return null;
+
+  // 2. High-speed rate-limit-free fallback: BigDataCloud Reverse Geocoding
+  try {
+    const bdcRes = await fetch(
+      `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${numLat}&longitude=${numLng}&localityLanguage=en`
+    );
+    if (bdcRes.ok) {
+      const bdcData = await bdcRes.json();
+      if (bdcData) {
+        const parts = [
+          bdcData.locality,
+          bdcData.city !== bdcData.locality ? bdcData.city : null,
+          bdcData.principalSubdivision,
+          bdcData.postcode
+        ].filter(Boolean);
+        const formatted = parts.filter((item, idx) => parts.indexOf(item) === idx).join(', ');
+        if (formatted) {
+          backendAddressCache.set(cacheKey, formatted);
+          return formatted;
+        }
+      }
+    }
+  } catch (bdcErr) {
+    console.warn('Backend BigDataCloud reverse geocode fallback notice:', bdcErr.message);
+  }
+
+  return `GPS (${numLat.toFixed(4)}, ${numLng.toFixed(4)})`;
 }
 
 app.get('/api/attendance', async (req, res) => {
@@ -1553,12 +1594,17 @@ app.post('/api/attendance/check-in', async (req, res) => {
 
     let newAtt;
     if (existingPunch) {
+      let updatedLoc = finalLocation;
+      if (existingPunch.location && existingPunch.location.includes(' | Out: ')) {
+        const outPart = existingPunch.location.split(' | Out: ')[1];
+        updatedLoc = `${finalLocation} | Out: ${outPart}`;
+      }
       newAtt = await prisma.attendanceLog.update({
         where: { id: existingPunch.id },
         data: {
           checkInTime: timeStr,
           status,
-          location: finalLocation
+          location: updatedLoc
         }
       });
     } else {
@@ -1676,9 +1722,11 @@ app.post('/api/attendance/check-out', async (req, res) => {
 
     let updatedAtt;
     if (existingPunch) {
-      const updatedLoc = existingPunch.location && !existingPunch.location.includes('Out:') 
-        ? `${existingPunch.location} | Out: ${finalLocation}`
-        : finalLocation;
+      let updatedLoc = `Out: ${finalLocation}`;
+      if (existingPunch.location) {
+        const inLoc = existingPunch.location.split(' | Out: ')[0].trim();
+        updatedLoc = inLoc ? `${inLoc} | Out: ${finalLocation}` : `Out: ${finalLocation}`;
+      }
 
       updatedAtt = await prisma.attendanceLog.update({
         where: { id: existingPunch.id },
