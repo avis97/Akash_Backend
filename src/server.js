@@ -2014,7 +2014,9 @@ function calculateHourlyOtFromLogs(attendanceLogs) {
 // HR Monthly Attendance Report & Analytics Endpoint (Superadmin)
 app.get('/api/attendance/monthly-report', async (req, res) => {
   try {
-    const { month = 'September', year = '2026' } = req.query;
+    const currentMonthDefault = new Date().toLocaleString('en-US', { month: 'long', timeZone: 'Asia/Kolkata' });
+    const currentYearDefault = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }).slice(0, 4) || String(new Date().getFullYear());
+    const { month = currentMonthDefault, year = currentYearDefault } = req.query;
     const users = await prisma.user.findMany({
       where: {
         role: {
@@ -2028,8 +2030,8 @@ app.get('/api/attendance/monthly-report', async (req, res) => {
       'January': 0, 'February': 1, 'March': 2, 'April': 3, 'May': 4, 'June': 5,
       'July': 6, 'August': 7, 'September': 8, 'October': 9, 'November': 10, 'December': 11
     };
-    const mIndex = monthMap[month] !== undefined ? monthMap[month] : 8;
-    const yr = Number(year) || 2026;
+    const mIndex = monthMap[month] !== undefined ? monthMap[month] : new Date().getMonth();
+    const yr = Number(year) || new Date().getFullYear();
     const startDate = new Date(yr, mIndex, 1, 0, 0, 0);
     const endDate = new Date(yr, mIndex + 1, 0, 23, 59, 59);
 
@@ -2134,7 +2136,9 @@ app.get('/api/attendance/monthly-report', async (req, res) => {
 // Batch Process Payroll for All Employees (Superadmin 1-Click)
 app.post('/api/payroll/generate-batch', async (req, res) => {
   try {
-    const { month = 'September', year = '2026' } = req.body;
+    const currentMonthDefault = new Date().toLocaleString('en-US', { month: 'long', timeZone: 'Asia/Kolkata' });
+    const currentYearDefault = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }).slice(0, 4) || String(new Date().getFullYear());
+    const { month = currentMonthDefault, year = currentYearDefault } = req.body;
     const users = await prisma.user.findMany({
       where: {
         role: {
@@ -4760,7 +4764,7 @@ app.post('/api/payroll', async (req, res) => {
     prismaData.absentDeductionPay = totalAbsentDeduction;
 
     const yearNum = Number(year) || new Date().getFullYear();
-    const monthStr = month || 'September';
+    const monthStr = month || new Date().toLocaleString('en-US', { month: 'long', timeZone: 'Asia/Kolkata' });
 
     // Upsert record for same user, month & year
     const existing = await prisma.salaryRecord.findFirst({
