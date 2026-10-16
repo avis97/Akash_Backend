@@ -4541,35 +4541,49 @@ function calculatePayrollEngine(input, config, prevRecord) {
   const workDays = config?.workDaysInMonth || 30;
   const workHours = config?.workHoursInDay || 8;
 
-  // Rule (a): Daily rate = (basic + four others payment) / 30
-  const dailyRate = grossBase / workDays;
+  // Daily rate = (basic + 4 others) / workDays
+  const dailyRate = workDays > 0 ? (grossBase / workDays) : 0;
 
-  // Rule (b): Hourly OT rate = (basic + four others payment) / 30 / 8
-  let rawHourlyOtRate = dailyRate / workHours;
-  let hourlyOtRate = rawHourlyOtRate;
-  // Step-rounding rule (e.g. 32.50..37.50 -> 35.00, 27.50..32.00 -> 30.00 => rounded to nearest multiple of 5)
-  if (rawHourlyOtRate > 0) {
-    hourlyOtRate = Math.round(rawHourlyOtRate / 5) * 5;
-  }
+  // Hourly OT rate = dailyRate / 8, rounded to step of 5
+  let rawHourlyOtRate = workHours > 0 ? (dailyRate / workHours) : 0;
+  let hourlyOtRate = rawHourlyOtRate > 0 ? Math.round(rawHourlyOtRate / 5) * 5 : 0;
 
+  // Overtime
   const overtimeHours = Number(input.overtimeHours) || 0;
-  const overtimePay = overtimeHours * hourlyOtRate;
+  const overtimePay = Math.round(overtimeHours * hourlyOtRate);
+  const overtimeDays = Number(input.overtimeDays) || 0;
+  const overtimeDaysPay = Math.round(overtimeDays * dailyRate);
+  const totalOtAmount = overtimeDaysPay + overtimePay;
 
-  // Rule (c): Offset Overtime Days & Absent Days against each other
-  const rawOtDays = Number(input.overtimeDays) || 0;
-  const rawAbsentDays = Number(input.absentDays) || 0;
-  let netOtDays = 0;
-  let netAbsentDays = 0;
-  if (rawOtDays >= rawAbsentDays) {
-    netOtDays = rawOtDays - rawAbsentDays;
-    netAbsentDays = 0;
+  // Present Days & Approved Leaves
+  // Rule: Pay salary ONLY for present days + leaves accepted by super admin
+  let presentDays = 0;
+  if (input.presentDays !== undefined && input.presentDays !== null && input.presentDays !== '') {
+    presentDays = Number(input.presentDays);
+  } else if (input.absentDays !== undefined && input.absentDays !== null && input.absentDays !== '') {
+    const rawAbs = Number(input.absentDays);
+    const rawAppLeave = Number(input.approvedLeaves || input.approvedLeaveDays || 0);
+    presentDays = Math.max(0, workDays - rawAbs - rawAppLeave);
   } else {
-    netAbsentDays = rawAbsentDays - rawOtDays;
-    netOtDays = 0;
+    presentDays = 0;
   }
-  const overtimeDaysPay = netOtDays * dailyRate;
 
-  // Rule (d), (e), (p), (q), (r): Leave calculation & balance tracking
+  // Only approved leaves are payable
+  const approvedLeaves = Number(input.approvedLeaves || input.approvedLeaveDays || 0);
+
+  // Total Paid / Payable Days
+  const paidDays = Math.min(workDays, Math.max(0, presentDays + approvedLeaves));
+  const absentDays = Math.max(0, workDays - paidDays);
+
+  // Present & Paid Leave Base Pay
+  const presentDayBaseSalary = Math.round(paidDays * dailyRate);
+
+  // Late Entries: 3 Late = 1 Absent Day deducted
+  const rawLateEntries = Number(input.lateEntries) || 0;
+  const lateAbsentDays = Math.floor(rawLateEntries / 3);
+  const lateDeductionPay = Math.round(lateAbsentDays * dailyRate);
+
+  // Leave Quota Tracking
   let prevLeaveBalance = config?.annualLeaveQuota !== undefined ? config.annualLeaveQuota : 14;
   if (input.prevLeaveBalance !== undefined && input.prevLeaveBalance !== null && input.prevLeaveBalance !== '') {
     prevLeaveBalance = Number(input.prevLeaveBalance);
@@ -4577,20 +4591,10 @@ function calculatePayrollEngine(input, config, prevRecord) {
     prevLeaveBalance = Number(prevRecord.currLeaveBalance);
   }
 
-  const currMonthLeaveAbsent = netAbsentDays; // Rule (d)
-  let leaveDeducted = 0;
-  let currLeaveBalance = 0;
+  const currLeaveBalance = Math.max(0, prevLeaveBalance - approvedLeaves);
+  const leaveDeducted = Math.max(0, approvedLeaves - prevLeaveBalance);
 
-  if (currMonthLeaveAbsent > prevLeaveBalance) { // Rule (e) & (q)
-    leaveDeducted = currMonthLeaveAbsent - prevLeaveBalance;
-    currLeaveBalance = 0;
-  } else { // Rule (r)
-    leaveDeducted = 0;
-    currLeaveBalance = prevLeaveBalance - currMonthLeaveAbsent;
-  }
-  const absentDeductionPay = leaveDeducted * dailyRate;
-
-  // Rule (f), (g), (h), (i): Loan / Advance calculation
+  // Loan / Advance
   let prevLoanDue = 0;
   if (input.prevLoanDue !== undefined && input.prevLoanDue !== null && input.prevLoanDue !== '') {
     prevLoanDue = Number(input.prevLoanDue);
@@ -4614,18 +4618,16 @@ function calculatePayrollEngine(input, config, prevRecord) {
   }
   const remLoanDue = Math.max(0, totalLoan - advanceDeducted);
 
-  // Rule (j): EPF = basic * 12%
+  // Statutory Deductions
   const epfDeduction = input.epfShare !== undefined && input.epfShare !== null && input.epfShare !== ''
     ? Number(input.epfShare)
     : Math.round(basic * (config?.epfPercent || 12) / 100);
 
-  // Rule (k): ESI = (basic + others1) * 0.75%
   const esiWage = basic + o1;
   const esiDeduction = input.esiShare !== undefined && input.esiShare !== null && input.esiShare !== ''
     ? Number(input.esiShare)
     : Math.round(esiWage * (config?.esiPercent || 0.75) / 100);
 
-  // Rule (l): Professional Tax
   let pTaxDeduction = 0;
   if (input.pTax !== undefined && input.pTax !== null && input.pTax !== '') {
     pTaxDeduction = Number(input.pTax);
@@ -4636,24 +4638,15 @@ function calculatePayrollEngine(input, config, prevRecord) {
     else pTaxDeduction = config?.pTaxTier1Amount || 0;
   }
 
-  // Rule (t): Bonus @ 8.33% on basic
+  // Bonus
   const bonusEnabled = Boolean(input.bonusEnabled);
   const bonusAmount = bonusEnabled ? Math.round(basic * (config?.bonusPercent || 8.33) / 100) : 0;
 
-  // Late Entries Deduction:
-  // Office Clock-In: 9:30 AM to 10:00 AM. Last time of clock in is 10:00 AM.
-  // Clock in after 10 AM is late entry.
-  // 3 late entries during a month = 1 absent deduction from salary.
-  const rawLateEntries = Number(input.lateEntries) || 0;
-  const lateAbsentDays = Math.floor(rawLateEntries / 3);
-  const lateDeductionPay = Math.round(lateAbsentDays * dailyRate);
-
-  // Earnings & Deductions totals (deductions include general absent days + late entry absent days)
-  const grossSalary = grossBase + overtimeDaysPay + overtimePay + bonusAmount;
-  const totalDeductions = Math.round(absentDeductionPay + lateDeductionPay + advanceDeducted + epfDeduction + esiDeduction + pTaxDeduction);
-
-  // Rule (m) & (n): Net Take Home Salary
-  const netSalary = Math.round(grossSalary - totalDeductions);
+  // Gross Salary = presentDayBaseSalary (paid days) + overtime + bonus
+  const grossSalary = presentDayBaseSalary + totalOtAmount + bonusAmount;
+  // Total deductions: late fine + loan recovery + EPF + ESI + P-Tax
+  const totalDeductions = Math.round(lateDeductionPay + advanceDeducted + epfDeduction + esiDeduction + pTaxDeduction);
+  const netSalary = Math.max(0, Math.round(grossSalary - totalDeductions));
 
   return {
     baseSalary: basic,
@@ -4667,18 +4660,23 @@ function calculatePayrollEngine(input, config, prevRecord) {
     hourlyOtRate,
     overtimeHours,
     overtimePay,
-    overtimeDays: rawOtDays,
+    overtimeDays,
     overtimeDaysPay,
-    absentDays: rawAbsentDays,
+    absentDays,
     lateEntries: rawLateEntries,
     lateAbsentDays,
     lateDeductionPay,
-    netAbsentDays,
-    netOvertimeDays: netOtDays,
+    presentDays,
+    approvedLeaves,
+    paidDays,
+    presentDayBaseSalary,
+    totalOtAmount,
+    netAbsentDays: absentDays,
+    netOvertimeDays: overtimeDays,
     prevLeaveBalance,
-    currMonthLeaveAbsent,
+    currMonthLeaveAbsent: absentDays,
     leaveDeducted,
-    absentDeductionPay,
+    absentDeductionPay: lateDeductionPay,
     currLeaveBalance,
     prevLoanDue,
     furtherLoanTaken,
@@ -4781,14 +4779,17 @@ app.get('/api/payroll/previous-month-data', async (req, res) => {
     let autoOtHours = 0;
     let autoOtDays = 0;
     let autoAbsentDays = 0;
+    let autoPresentDays = 0;
+    let autoApprovedLeaves = 0;
+    let autoLateEntries = 0;
 
     if (month && year) {
       const monthMap = {
         'January': 0, 'February': 1, 'March': 2, 'April': 3, 'May': 4, 'June': 5,
         'July': 6, 'August': 7, 'September': 8, 'October': 9, 'November': 10, 'December': 11
       };
-      const mIdx = monthMap[month] !== undefined ? monthMap[month] : 8;
-      const yr = Number(year) || 2026;
+      const mIdx = monthMap[month] !== undefined ? monthMap[month] : new Date().getMonth();
+      const yr = Number(year) || new Date().getFullYear();
       const startDate = new Date(yr, mIdx, 1, 0, 0, 0);
       const endDate = new Date(yr, mIdx + 1, 0, 23, 59, 59);
 
@@ -4802,20 +4803,18 @@ app.get('/api/payroll/previous-month-data', async (req, res) => {
         }
       });
 
-      let presentCount = 0;
-      let explicitAbsentCount = 0;
-      let lateCount = 0;
-
+      // Track unique present calendar days to avoid duplicates
+      const presentDates = new Set();
       for (const log of logs) {
         const isLateLog = log.status === 'LATE' || log.status === 'Late' || (log.checkInTime && isPunchTimeLate(log.checkInTime));
         if (isLateLog) {
-          lateCount += 1;
+          autoLateEntries += 1;
         }
 
-        if (log.status === 'ABSENT' || log.status === 'Absent') {
-          explicitAbsentCount += 1;
-        } else if (log.status === 'PRESENT' || log.status === 'LATE' || log.status === 'Late' || log.status === 'ON_DUTY' || log.checkInTime) {
-          presentCount += 1;
+        const isPresent = log.status === 'PRESENT' || log.status === 'LATE' || log.status === 'Late' || log.status === 'ON_DUTY' || (log.checkInTime && log.status !== 'ABSENT');
+        if (isPresent && log.date) {
+          const dStr = new Date(log.date).toISOString().slice(0, 10);
+          presentDates.add(dStr);
         }
 
         if (log.status === 'OVERTIME' || log.status === 'OT_DAY') {
@@ -4835,28 +4834,49 @@ app.get('/api/payroll/previous-month-data', async (req, res) => {
           }
         }
       }
+      autoPresentDays = presentDates.size;
 
-      if (explicitAbsentCount > 0) {
-        autoAbsentDays = explicitAbsentCount;
-      } else if (logs.length > 0) {
-        autoAbsentDays = Math.max(0, 30 - presentCount);
-      } else {
-        autoAbsentDays = 30;
+      // Approved leaves: ONLY leaves approved by Super Admin
+      const approvedLeaves = await prisma.leaveRequest.findMany({
+        where: {
+          OR: [
+            { userId },
+            ...(dbUser?.name ? [{ userName: { equals: dbUser.name, mode: 'insensitive' } }] : [])
+          ],
+          status: 'APPROVED',
+          startDate: { lte: endDate },
+          endDate: { gte: startDate }
+        }
+      });
+
+      for (const lv of approvedLeaves) {
+        const lvStart = new Date(Math.max(new Date(lv.startDate).getTime(), startDate.getTime()));
+        const lvEnd = new Date(Math.min(new Date(lv.endDate).getTime(), endDate.getTime()));
+        if (lvEnd >= lvStart) {
+          const days = Math.round((lvEnd - lvStart) / (1000 * 60 * 60 * 24)) + 1;
+          autoApprovedLeaves += Math.max(0, days);
+        }
       }
+
+      const totalWorkDays = config?.workDaysInMonth || 30;
+      autoAbsentDays = Math.max(0, totalWorkDays - autoPresentDays - autoApprovedLeaves);
     }
 
     return res.json({
       success: true,
-      prevLeaveBalance: lastRecord ? lastRecord.currLeaveBalance : config.annualLeaveQuota,
+      prevLeaveBalance: lastRecord ? lastRecord.currLeaveBalance : (config.annualLeaveQuota || 14),
       prevLoanDue: lastRecord ? lastRecord.remLoanDue : 0,
+      autoPresentDays,
+      autoApprovedLeaves,
+      autoAbsentDays,
+      autoLateEntries,
+      autoLateAbsentDays: Math.floor(autoLateEntries / 3),
       autoOtHours: Math.round(autoOtHours * 10) / 10,
       autoOtDays,
-      autoAbsentDays,
-      autoLateEntries: lateCount,
-      autoLateAbsentDays: Math.floor(lateCount / 3),
       lastRecord
     });
   } catch (err) {
+    console.error('Error fetching previous month data:', err);
     return res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -4917,7 +4937,11 @@ app.post('/api/payroll', async (req, res) => {
     });
 
     const computed = calculatePayrollEngine(req.body, config, prevRecord);
-    const { lateEntries, lateAbsentDays, lateDeductionPay, ...prismaData } = computed;
+    const {
+      lateEntries, lateAbsentDays, lateDeductionPay,
+      presentDays, approvedLeaves, paidDays, presentDayBaseSalary, totalOtAmount,
+      ...prismaData
+    } = computed;
     const totalAbsentDeduction = (computed.absentDeductionPay || 0) + (computed.lateDeductionPay || 0);
     prismaData.absentDeductionPay = totalAbsentDeduction;
 
@@ -4957,7 +4981,7 @@ app.post('/api/payroll', async (req, res) => {
     return res.json({
       success: true,
       message: `Payslip for ${user.name} processed successfully!`,
-      data: { ...record, lateEntries, lateAbsentDays, lateDeductionPay }
+      data: { ...record, presentDays, approvedLeaves, paidDays, presentDayBaseSalary, totalOtAmount, lateEntries, lateAbsentDays, lateDeductionPay }
     });
   } catch (err) {
     console.error('Error generating payroll:', err);
@@ -4979,7 +5003,11 @@ app.put('/api/payroll/:id', async (req, res) => {
     });
 
     const computed = calculatePayrollEngine({ ...existing, ...req.body }, config, prevRecord);
-    const { lateEntries, lateAbsentDays, lateDeductionPay, ...prismaData } = computed;
+    const {
+      lateEntries, lateAbsentDays, lateDeductionPay,
+      presentDays, approvedLeaves, paidDays, presentDayBaseSalary, totalOtAmount,
+      ...prismaData
+    } = computed;
     const totalAbsentDeduction = (computed.absentDeductionPay || 0) + (computed.lateDeductionPay || 0);
     prismaData.absentDeductionPay = totalAbsentDeduction;
 
