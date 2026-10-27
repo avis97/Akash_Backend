@@ -253,27 +253,23 @@ function generateQuotationPdfBuffer(quotation) {
       doc.y = totY + 8;
 
       // 8. Bank Settlement Details Box
-      const bank = quotation.bankDetails || {};
-      const hasBank = bank.bankName || bank.accountNumber || quotation.bankName || quotation.accountNumber;
-      if (hasBank) {
-        const bName = bank.bankName || quotation.bankName || '';
-        const bAcc = bank.accountNumber || quotation.accountNumber || '';
-        const bHolder = bank.accountHolderName || quotation.accountHolderName || '';
-        const bIfsc = bank.bankIdentifierCode || quotation.bankIdentifierCode || '';
-        const bBranch = bank.branchLocation || quotation.branchLocation || '';
+      const bName = 'HDFC Bank Ltd';
+      const bAcc = '50200106616314';
+      const bHolder = 'Akash Engineering';
+      const bIfsc = 'HDFC0000022';
+      const bBranch = 'Golpark';
 
-        const bankBoxY = doc.y;
-        if (bankBoxY + 50 > 750) doc.addPage();
-        
-        doc.rect(margin, doc.y, contentWidth, 42).fillAndStroke('#f8fafc', '#cbd5e1');
-        doc.fillColor('#1e3a8a').font('Helvetica-Bold').fontSize(8).text('BANK SETTLEMENT DETAILS (FOR RTGS / NEFT / IMPS)', margin + 8, doc.y + 6);
-        
-        const bankLine1 = `Bank: ${bName}  |  A/C Number: ${bAcc}  |  IFSC Code: ${bIfsc}`;
-        const bankLine2 = `A/C Holder: ${bHolder || 'AKASH ENGINEERING'}  |  Branch: ${bBranch || 'Kolkata'}`;
-        doc.fillColor('#334155').font('Helvetica').fontSize(7.5).text(bankLine1, margin + 8, doc.y + 18);
-        doc.fillColor('#334155').font('Helvetica').fontSize(7.5).text(bankLine2, margin + 8, doc.y + 29);
-        doc.y = doc.y + 48;
-      }
+      const bankBoxY = doc.y;
+      if (bankBoxY + 50 > 750) doc.addPage();
+      
+      doc.rect(margin, doc.y, contentWidth, 42).fillAndStroke('#f8fafc', '#cbd5e1');
+      doc.fillColor('#1e3a8a').font('Helvetica-Bold').fontSize(8).text('BANK SETTLEMENT DETAILS (FOR RTGS / NEFT / IMPS)', margin + 8, doc.y + 6);
+      
+      const bankLine1 = `Bank: ${bName}  |  A/C Number: ${bAcc}  |  IFSC Code: ${bIfsc}`;
+      const bankLine2 = `Beneficiary: ${bHolder}  |  Branch: ${bBranch}`;
+      doc.fillColor('#334155').font('Helvetica').fontSize(7.5).text(bankLine1, margin + 8, doc.y + 18);
+      doc.fillColor('#334155').font('Helvetica').fontSize(7.5).text(bankLine2, margin + 8, doc.y + 29);
+      doc.y = doc.y + 48;
 
       // 9. Terms and Conditions
       const termsList = formatTermsList(quotation.termsAndConditions);

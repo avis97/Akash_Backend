@@ -343,18 +343,16 @@ async function sendQuotationEmail({
           </table>
 
           <!-- Bank Details -->
-          ${bankDetails && (bankDetails.bankName || bankDetails.accountNumber) ? `
-            <div class="bank-box">
-              <div class="bank-title">🏦 Bank Settlement Details</div>
-              <div class="bank-grid">
-                ${bankDetails.bankName ? `<div><strong>Bank:</strong> ${bankDetails.bankName}</div>` : ''}
-                ${bankDetails.accountNumber ? `<div><strong>A/C No:</strong> ${bankDetails.accountNumber}</div>` : ''}
-                ${bankDetails.accountHolderName ? `<div><strong>A/C Holder:</strong> ${bankDetails.accountHolderName}</div>` : ''}
-                ${bankDetails.bankIdentifierCode ? `<div><strong>IFSC Code:</strong> ${bankDetails.bankIdentifierCode}</div>` : ''}
-                ${bankDetails.branchLocation ? `<div><strong>Branch:</strong> ${bankDetails.branchLocation}</div>` : ''}
-              </div>
+          <div class="bank-box">
+            <div class="bank-title">🏦 Bank Settlement Details</div>
+            <div class="bank-grid">
+              <div><strong>Beneficiary:</strong> Akash Engineering</div>
+              <div><strong>Bank:</strong> HDFC Bank Ltd</div>
+              <div><strong>Branch:</strong> Golpark</div>
+              <div><strong>A/C No:</strong> 50200106616314</div>
+              <div><strong>IFSC Code:</strong> HDFC0000022</div>
             </div>
-          ` : ''}
+          </div>
 
           <!-- PDF Attachment Callout -->
           <div style="background: #eff6ff; border: 1.5px dashed #3b82f6; border-radius: 8px; padding: 12px 18px; margin: 18px 0;">
