@@ -115,6 +115,7 @@ model User {
   activityLogs     ActivityLog[]
   quotations       Quotation[]         @relation("ClientQuotations")
   invoices         Invoice[]           @relation("ClientInvoices")
+  challans         DeliveryChallan[]   @relation("ClientChallans")
   projectsAsCustomer Project[]         @relation("CustomerProjects")
   projectsAsEmployee Project[]         @relation("EmployeeProjects")
   trainings          TrainingEmployee[]
@@ -384,6 +385,7 @@ model Quotation {
   updatedAt          DateTime @updatedAt
 
   invoices           Invoice[]
+  challans           DeliveryChallan[]
 }
 
 model Invoice {
@@ -391,6 +393,8 @@ model Invoice {
   invoiceNumber      String        @unique
   quotationId        String?
   quotation          Quotation?    @relation(fields: [quotationId], references: [id], onDelete: SetNull)
+  challanId          String?
+  challan            DeliveryChallan? @relation(fields: [challanId], references: [id], onDelete: SetNull)
   clientId           String?
   client             User?         @relation("ClientInvoices", fields: [clientId], references: [id], onDelete: SetNull)
   clientName         String
@@ -423,6 +427,38 @@ model Invoice {
   updatedAt          DateTime      @updatedAt
 
   reminders          PaymentReminder[]
+}
+
+model DeliveryChallan {
+  id                 String        @id @default(uuid())
+  challanNumber      String        @unique
+  quotationId        String?
+  quotation          Quotation?    @relation(fields: [quotationId], references: [id], onDelete: SetNull)
+  clientId           String?
+  client             User?         @relation("ClientChallans", fields: [clientId], references: [id], onDelete: SetNull)
+  clientName         String
+  clientEmail        String?
+  clientPhone        String?
+  clientAddress      String?
+  clientGst          String?
+  clientPan          String?
+  deliveryAddress    String?
+  vehicleNumber      String?
+  driverName         String?
+  transportMode      String?       @default("Road")
+  dispatchDate       DateTime?     @default(now())
+  documentHead       String?       @default("DELIVERY CHALLAN")
+  subject            String?
+  notes              String?
+  totalAmount        Float         @default(0)
+  status             String        @default("DISPATCHED") // DISPATCHED, DELIVERED, INVOICED, CANCELLED
+  itemsJson          String        // JSON string of item line details
+  invoiceId          String?       // Stored reference to converted invoice
+  invoiceNumber      String?       // Stored invoice number
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  invoices           Invoice[]
 }
 
 model PaymentReminder {

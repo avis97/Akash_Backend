@@ -67,6 +67,9 @@ function formatDbErrorMessage(err) {
       if (targetStr.includes('quotationNumber') || err.message.includes('(`quotationNumber`)')) {
         return 'A quotation with this Quotation Number already exists. Please use a unique quotation number.';
       }
+      if (targetStr.includes('challanNumber') || err.message.includes('(`challanNumber`)')) {
+        return 'A delivery challan with this Challan Number already exists. Please use a unique challan number.';
+      }
       if (targetStr.includes('invoiceNumber') || err.message.includes('(`invoiceNumber`)')) {
         return 'An invoice with this Invoice Number already exists. Please use a unique invoice number.';
       }
@@ -2665,7 +2668,7 @@ async function deductInventoryStockForItems(items, referenceNo, performedBy) {
           type: 'OUTFLOW',
           quantity: qtyToDeduct,
           referenceNo: referenceNo || 'REF-BILL',
-          notes: `Outflow: Deducted ${qtyToDeduct} unit(s) from inventory total quantity for Invoice #${referenceNo}`,
+          notes: `Outflow: Deducted ${qtyToDeduct} unit(s) from inventory total quantity for ${referenceNo && (referenceNo.includes('DC') || referenceNo.includes('CHALLAN')) ? 'Delivery Challan' : 'Invoice'} #${referenceNo}`,
           performedBy: performedBy || 'Superadmin'
         }
       }).catch(e => console.warn('Inventory transaction log warning:', e.message));
@@ -2687,6 +2690,7 @@ app.get('/api/billing/quotations', async (req, res) => {
       where: whereClause,
       orderBy: { createdAt: 'desc' },
       include: {
+        challans: { select: { id: true, challanNumber: true, status: true, invoiceNumber: true } },
         client: {
           select: { 
             id: true, name: true, email: true, phone: true, clientStatus: true,
@@ -3219,12 +3223,371 @@ app.get('/api/billing/quotations/:id/pdf', async (req, res) => {
   }
 });
 
+// ----------------------------------------------------
+// 7B. Delivery Challan Management & Inventory Outflow
+// ----------------------------------------------------
+
+async function generateNextChallanNumber() {
+  const allChallans = await prisma.deliveryChallan.findMany({ select: { challanNumber: true } });
+  let maxNum = 100;
+  allChallans.forEach(c => {
+    const match = c.challanNumber && c.challanNumber.match(/(\d+)$/);
+    if (match) {
+      const num = parseInt(match[1], 10);
+      if (!isNaN(num) && num > maxNum) maxNum = num;
+    }
+  });
+  let nextNum = maxNum + 1;
+  let chNo = `AKASH/DC/25-26/${nextNum}`;
+  let existing = await prisma.deliveryChallan.findUnique({ where: { challanNumber: chNo } });
+  let offset = 1;
+  while (existing) {
+    chNo = `AKASH/DC/25-26/${nextNum + offset}`;
+    existing = await prisma.deliveryChallan.findUnique({ where: { challanNumber: chNo } });
+    offset++;
+  }
+  return chNo;
+}
+
+// GET all delivery challans
+app.get('/api/billing/challans', async (req, res) => {
+  try {
+    const { clientId, clientEmail } = req.query;
+    const whereClause = {};
+    if (clientId) whereClause.clientId = clientId;
+    if (clientEmail) whereClause.clientEmail = clientEmail;
+
+    const challans = await prisma.deliveryChallan.findMany({
+      where: whereClause,
+      orderBy: { createdAt: 'desc' },
+      include: {
+        quotation: { select: { id: true, quotationNumber: true, status: true } },
+        invoices: { select: { id: true, invoiceNumber: true, status: true } },
+        client: { select: { id: true, name: true, email: true, phone: true } }
+      }
+    });
+    return res.json({ success: true, data: challans });
+  } catch (err) {
+    console.error('Error fetching challans:', err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// GET next challan number preview
+app.get('/api/billing/challans/next-number', async (req, res) => {
+  try {
+    const challanNumber = await generateNextChallanNumber();
+    return res.json({ success: true, challanNumber });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// CREATE Delivery Challan & DEDUCT Inventory
+app.post('/api/billing/challans', async (req, res) => {
+  try {
+    const {
+      challanNumber, quotationId, clientId, clientName, clientEmail, clientPhone, clientAddress, clientGst, clientPan,
+      deliveryAddress, vehicleNumber, driverName, transportMode, dispatchDate, documentHead, subject, notes, items, itemsJson, totalAmount, performedBy
+    } = req.body;
+
+    let chNo = challanNumber ? challanNumber.trim() : await generateNextChallanNumber();
+    const existing = await prisma.deliveryChallan.findUnique({ where: { challanNumber: chNo } });
+    if (existing) {
+      chNo = await generateNextChallanNumber();
+    }
+
+    let parsedItems = items !== undefined ? items : itemsJson;
+    if (typeof parsedItems === 'string') {
+      try {
+        parsedItems = JSON.parse(parsedItems);
+      } catch (e) {
+        parsedItems = [];
+      }
+    }
+    if (!Array.isArray(parsedItems)) parsedItems = [];
+
+    const computedTotal = Number(totalAmount) || parsedItems.reduce((acc, it) => acc + (Number(it.total) || ((Number(it.qty) || 1) * (Number(it.unitPrice) || 0))), 0);
+
+    const newChallan = await prisma.deliveryChallan.create({
+      data: {
+        challanNumber: chNo,
+        quotationId: quotationId || null,
+        clientId: clientId || null,
+        clientName: clientName || 'Client Organization',
+        clientEmail: clientEmail || '',
+        clientPhone: clientPhone || null,
+        clientAddress: clientAddress || null,
+        clientGst: clientGst || null,
+        clientPan: clientPan || null,
+        deliveryAddress: deliveryAddress || clientAddress || null,
+        vehicleNumber: vehicleNumber || null,
+        driverName: driverName || null,
+        transportMode: transportMode || 'Road',
+        dispatchDate: dispatchDate ? new Date(dispatchDate) : new Date(),
+        documentHead: documentHead || 'DELIVERY CHALLAN',
+        subject: subject || null,
+        notes: notes || 'Goods dispatched in sound and satisfactory condition against quotation.',
+        totalAmount: computedTotal,
+        status: 'DISPATCHED',
+        itemsJson: JSON.stringify(
+          parsedItems.map(it => ({
+            productId: it.productId || '',
+            name: it.name || '',
+            description: it.description || '',
+            code: it.code || '',
+            unit: it.unit || 'Nos',
+            unitPrice: Number(it.unitPrice) || 0,
+            qty: Number(it.qty) || 1,
+            total: Number(it.total) || ((Number(it.qty) || 1) * (Number(it.unitPrice) || 0))
+          }))
+        )
+      }
+    });
+
+    // Deduct stock quantities from inventory count
+    if (parsedItems.length > 0) {
+      await deductInventoryStockForItems(parsedItems, chNo, performedBy || req.user?.name || 'Superadmin');
+    }
+
+    await logActivity(
+      performedBy || req.user?.name || 'Superadmin',
+      `Issued Delivery Challan #${newChallan.challanNumber} to ${clientName} (${parsedItems.length} line items) and deducted item quantities from Inventory.`,
+      'Billing & Dispatch'
+    );
+
+    return res.status(201).json({
+      success: true,
+      message: `Delivery Challan #${newChallan.challanNumber} issued successfully! Item quantities deducted from Inventory count.`,
+      data: newChallan
+    });
+  } catch (err) {
+    console.error('Error creating delivery challan:', err);
+    return res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
+  }
+});
+
+// GENERATE DELIVERY CHALLAN DIRECTLY FROM APPROVED QUOTATION & DEDUCT INVENTORY
+app.post('/api/billing/quotations/:id/generate-challan', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { vehicleNumber, driverName, transportMode, deliveryAddress, notes, dispatchDate, generatedBy } = req.body;
+
+    const existingQuot = await prisma.quotation.findUnique({ where: { id } });
+    if (!existingQuot) return res.status(404).json({ success: false, message: 'Quotation not found' });
+
+    let chNo = await generateNextChallanNumber();
+
+    let itemsParsed = [];
+    try {
+      itemsParsed = JSON.parse(existingQuot.itemsJson);
+    } catch (e) {
+      itemsParsed = [{ name: 'Equipment & Material Supply', qty: 1, unitPrice: existingQuot.totalAmount, total: existingQuot.totalAmount }];
+    }
+
+    const newChallan = await prisma.deliveryChallan.create({
+      data: {
+        challanNumber: chNo,
+        quotationId: existingQuot.id,
+        clientId: existingQuot.clientId || null,
+        clientName: existingQuot.clientName,
+        clientEmail: existingQuot.clientEmail,
+        clientPhone: existingQuot.clientPhone,
+        clientAddress: existingQuot.clientAddress,
+        clientGst: existingQuot.clientGst,
+        clientPan: existingQuot.clientPan,
+        deliveryAddress: deliveryAddress || existingQuot.clientAddress || null,
+        vehicleNumber: vehicleNumber || null,
+        driverName: driverName || null,
+        transportMode: transportMode || 'Road',
+        dispatchDate: dispatchDate ? new Date(dispatchDate) : new Date(),
+        documentHead: 'DELIVERY CHALLAN',
+        subject: existingQuot.subject || `Delivery against Quotation #${existingQuot.quotationNumber}`,
+        notes: notes || 'Goods dispatched in sound condition as per approved Quotation.',
+        totalAmount: existingQuot.totalAmount,
+        status: 'DISPATCHED',
+        itemsJson: existingQuot.itemsJson || JSON.stringify(itemsParsed)
+      }
+    });
+
+    // Deduct stock from inventory
+    await deductInventoryStockForItems(itemsParsed, chNo, generatedBy || req.user?.name || 'Superadmin');
+
+    await logActivity(
+      generatedBy || req.user?.name || 'Superadmin',
+      `Generated Delivery Challan #${newChallan.challanNumber} from approved Quotation #${existingQuot.quotationNumber} and deducted items from Inventory.`,
+      'Billing & Quotations'
+    );
+
+    return res.status(201).json({
+      success: true,
+      message: `Delivery Challan #${newChallan.challanNumber} created from Quotation #${existingQuot.quotationNumber}! Inventory quantities updated.`,
+      data: newChallan
+    });
+  } catch (err) {
+    console.error('Error generating challan from quotation:', err);
+    return res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
+  }
+});
+
+// CONVERT DELIVERY CHALLAN TO TAX INVOICE (Without Deducting Inventory Again!)
+app.post('/api/billing/challans/:id/convert-to-invoice', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { invoiceNumber, dueDate, generatedBy } = req.body;
+
+    const existingChallan = await prisma.deliveryChallan.findUnique({
+      where: { id },
+      include: { quotation: true }
+    });
+    if (!existingChallan) return res.status(404).json({ success: false, message: 'Delivery Challan not found' });
+
+    let invNo = invoiceNumber ? invoiceNumber.trim() : await generateNextInvoiceNumber();
+    const collision = await prisma.invoice.findUnique({ where: { invoiceNumber: invNo } });
+    if (collision) {
+      invNo = await generateNextInvoiceNumber();
+    }
+
+    let itemsParsed = [];
+    try {
+      itemsParsed = JSON.parse(existingChallan.itemsJson);
+    } catch (e) {
+      itemsParsed = [{ name: 'Delivered Materials & Equipment', qty: 1, unitPrice: existingChallan.totalAmount, total: existingChallan.totalAmount }];
+    }
+
+    const subtotal = existingChallan.totalAmount || itemsParsed.reduce((a, b) => a + (Number(b.total) || 0), 0);
+    const discPercent = existingChallan.quotation?.discount || 0;
+    const discAmount = Math.round(subtotal * (discPercent / 100));
+    const taxable = Math.max(0, subtotal - discAmount);
+    const gst = Math.round(taxable * 0.18);
+    const grand = taxable + gst;
+
+    // 1. Create Tax Invoice linked to Challan & Quotation
+    const createdInvoice = await prisma.invoice.create({
+      data: {
+        invoiceNumber: invNo,
+        quotationId: existingChallan.quotationId || null,
+        challanId: existingChallan.id,
+        clientId: existingChallan.clientId || null,
+        clientName: existingChallan.clientName,
+        clientEmail: existingChallan.clientEmail || '',
+        clientPhone: existingChallan.clientPhone || null,
+        clientAddress: existingChallan.clientAddress || null,
+        clientGst: existingChallan.clientGst || null,
+        clientPan: existingChallan.clientPan || null,
+        accountHolderName: 'Akash Engineering',
+        accountNumber: '50200106616314',
+        bankName: 'HDFC Bank Ltd',
+        bankIdentifierCode: 'HDFC0000022',
+        branchLocation: 'Golpark',
+        documentHead: 'TAX INVOICE',
+        subject: existingChallan.subject || `Invoice against Delivery Challan #${existingChallan.challanNumber}`,
+        kindAttention: existingChallan.quotation?.kindAttention || null,
+        preface: existingChallan.quotation?.preface || null,
+        termsAndConditions: existingChallan.quotation?.termsAndConditions || null,
+        totalAmount: subtotal,
+        discount: discPercent,
+        gstAmount: gst,
+        grandTotal: grand,
+        paidAmount: 0,
+        balanceAmount: grand,
+        dueDate: dueDate ? new Date(dueDate) : new Date(Date.now() + 15 * 24 * 60 * 60 * 1000),
+        status: 'UNPAID',
+        itemsJson: existingChallan.itemsJson
+      }
+    });
+
+    // 2. Mark Challan as INVOICED with reference to new invoice
+    const updatedChallan = await prisma.deliveryChallan.update({
+      where: { id },
+      data: {
+        status: 'INVOICED',
+        invoiceId: createdInvoice.id,
+        invoiceNumber: createdInvoice.invoiceNumber
+      }
+    });
+
+    // 3. If Quotation is linked, update Quotation to BILLED
+    if (existingChallan.quotationId) {
+      await prisma.quotation.update({
+        where: { id: existingChallan.quotationId },
+        data: { status: 'BILLED' }
+      }).catch(e => console.warn('Could not update quotation status to billed:', e.message));
+    }
+
+    // NOTE: Inventory was ALREADY deducted when Delivery Challan was issued!
+    // Therefore, do NOT deduct inventory again.
+
+    await logActivity(
+      generatedBy || req.user?.name || 'Superadmin',
+      `Converted Delivery Challan #${existingChallan.challanNumber} into Tax Invoice #${createdInvoice.invoiceNumber} (₹${grand.toLocaleString()}). (Inventory already deducted on dispatch).`,
+      'Billing & Quotations'
+    );
+
+    return res.status(201).json({
+      success: true,
+      message: `Tax Invoice #${createdInvoice.invoiceNumber} generated from Challan #${existingChallan.challanNumber}!`,
+      invoice: createdInvoice,
+      data: updatedChallan
+    });
+  } catch (err) {
+    console.error('Error converting challan to invoice:', err);
+    return res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
+  }
+});
+
+// UPDATE Delivery Challan details
+app.put('/api/billing/challans/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { deliveryAddress, vehicleNumber, driverName, transportMode, dispatchDate, notes, status, subject } = req.body;
+
+    const existing = await prisma.deliveryChallan.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ success: false, message: 'Delivery Challan not found' });
+
+    const updated = await prisma.deliveryChallan.update({
+      where: { id },
+      data: {
+        ...(deliveryAddress !== undefined && { deliveryAddress }),
+        ...(vehicleNumber !== undefined && { vehicleNumber }),
+        ...(driverName !== undefined && { driverName }),
+        ...(transportMode !== undefined && { transportMode }),
+        ...(dispatchDate && { dispatchDate: new Date(dispatchDate) }),
+        ...(notes !== undefined && { notes }),
+        ...(status && { status }),
+        ...(subject !== undefined && { subject })
+      }
+    });
+
+    await logActivity('Superadmin', `Updated Delivery Challan #${existing.challanNumber}`, 'Billing & Dispatch');
+    return res.json({ success: true, message: 'Challan updated successfully', data: updated });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
+  }
+});
+
+// DELETE Delivery Challan
+app.delete('/api/billing/challans/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const existing = await prisma.deliveryChallan.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ success: false, message: 'Delivery Challan not found' });
+
+    await prisma.deliveryChallan.delete({ where: { id } });
+    await logActivity('Admin', `Deleted Delivery Challan #${existing.challanNumber}`, 'Billing & Dispatch');
+    return res.json({ success: true, message: `Delivery Challan #${existing.challanNumber} deleted` });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 app.get('/api/billing/invoices', async (req, res) => {
   try {
     const invoices = await prisma.invoice.findMany({
       orderBy: { createdAt: 'desc' },
       include: {
         quotation: { select: { quotationNumber: true } },
+        challan: { select: { id: true, challanNumber: true, status: true } },
         client: { select: { id: true, name: true, email: true, phone: true, accountHolderName: true, accountNumber: true, bankName: true, bankIdentifierCode: true, branchLocation: true } }
       }
     });
