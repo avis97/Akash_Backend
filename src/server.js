@@ -4,6 +4,8 @@ const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { PrismaClient } = require('@prisma/client');
+const fs = require('fs');
+const path = require('path');
 const { sendAccountCredentialsEmail, sendQuotationEmail, generateQuotationPdfBuffer, SMTP_USER } = require('./emailService');
 
 const app = express();
@@ -980,6 +982,150 @@ app.delete('/api/employees/:id', authenticateToken, requireSuperAdmin, async (re
     return res.status(500).json({ success: false, message: err.message || 'Error deleting employee' });
   }
 });
+
+// ----------------------------------------------------
+// Role-Based Menu & Access Control Endpoints
+// ----------------------------------------------------
+const PERMISSIONS_FILE = path.join(__dirname, '..', 'role_permissions_data.json');
+
+const DEFAULT_ROLE_PERMISSIONS_BACKEND = {
+  SUPERADMIN: [
+    'dashboard', 'service_meeting', 'projects', 'material_request',
+    'hrm_attendance', 'hrm_payroll', 'hrm_training', 'products_inventory',
+    'acc_billing', 'acc_purchases', 'purchases_vendors', 'purchases_bills',
+    'acc_vouchers', 'site_amc', 'user_management', 'location_tracking',
+    'master_settings', 'role_permissions'
+  ],
+  MASTER_ADMIN: [
+    'dashboard', 'service_meeting', 'projects', 'material_request',
+    'hrm_attendance', 'hrm_payroll', 'hrm_training', 'products_inventory',
+    'acc_billing', 'acc_purchases', 'purchases_vendors', 'purchases_bills',
+    'acc_vouchers', 'site_amc', 'location_tracking', 'master_settings'
+  ],
+  SUB_ADMIN: [
+    'dashboard', 'service_meeting', 'projects', 'material_request',
+    'hrm_attendance', 'hrm_payroll', 'hrm_training', 'products_inventory',
+    'acc_billing', 'acc_purchases', 'purchases_vendors', 'purchases_bills',
+    'site_amc', 'location_tracking', 'master_settings'
+  ],
+  FACILITY_MANAGER: [
+    'dashboard', 'service_meeting', 'projects', 'material_request',
+    'hrm_attendance', 'hrm_payroll', 'hrm_training', 'products_inventory',
+    'site_amc', 'location_tracking'
+  ],
+  EMPLOYEE: [
+    'service_meeting', 'projects', 'material_request', 'hrm_attendance',
+    'hrm_payroll', 'hrm_training', 'products_inventory', 'acc_billing', 'site_amc'
+  ],
+  SERVICE_PERSONNEL: [
+    'service_meeting', 'projects', 'material_request', 'hrm_attendance',
+    'hrm_payroll', 'hrm_training', 'products_inventory', 'site_amc'
+  ],
+  CLIENT: [
+    'dashboard', 'service_meeting', 'projects', 'acc_billing', 'site_amc'
+  ],
+  USER: [
+    'dashboard', 'service_meeting', 'projects', 'acc_billing'
+  ]
+};
+
+function loadStoredPermissions() {
+  try {
+    if (fs.existsSync(PERMISSIONS_FILE)) {
+      const data = JSON.parse(fs.readFileSync(PERMISSIONS_FILE, 'utf-8'));
+      return {
+        rolePermissions: { ...DEFAULT_ROLE_PERMISSIONS_BACKEND, ...(data.rolePermissions || {}) },
+        userPermissions: data.userPermissions || {}
+      };
+    }
+  } catch (err) {
+    console.error('Error reading permissions file:', err);
+  }
+  return {
+    rolePermissions: { ...DEFAULT_ROLE_PERMISSIONS_BACKEND },
+    userPermissions: {}
+  };
+}
+
+function saveStoredPermissions(perms) {
+  try {
+    fs.writeFileSync(PERMISSIONS_FILE, JSON.stringify(perms, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('Error saving permissions file:', err);
+  }
+}
+
+app.get('/api/role-permissions', (req, res) => {
+  const perms = loadStoredPermissions();
+  res.json({
+    success: true,
+    rolePermissions: perms.rolePermissions,
+    userPermissions: perms.userPermissions
+  });
+});
+
+app.post('/api/role-permissions', authenticateToken, requireSuperAdmin, async (req, res) => {
+  try {
+    const { rolePermissions } = req.body;
+    if (!rolePermissions || typeof rolePermissions !== 'object') {
+      return res.status(400).json({ success: false, message: 'Invalid role permissions object' });
+    }
+    const current = loadStoredPermissions();
+    current.rolePermissions = { ...current.rolePermissions, ...rolePermissions };
+    saveStoredPermissions(current);
+    await logActivity(req.user?.name || 'Superadmin', 'Updated system role menu permissions', 'Role Access Control');
+    res.json({ success: true, message: 'Role permissions saved successfully', rolePermissions: current.rolePermissions });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.post('/api/user-permissions', authenticateToken, requireSuperAdmin, async (req, res) => {
+  try {
+    const { userPermissions } = req.body;
+    if (!userPermissions || typeof userPermissions !== 'object') {
+      return res.status(400).json({ success: false, message: 'Invalid user permissions object' });
+    }
+    const current = loadStoredPermissions();
+    current.userPermissions = { ...current.userPermissions, ...userPermissions };
+    saveStoredPermissions(current);
+    await logActivity(req.user?.name || 'Superadmin', 'Updated custom user menu permissions', 'Role Access Control');
+    res.json({ success: true, message: 'User permissions saved successfully', userPermissions: current.userPermissions });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.put('/api/users/:id/role', authenticateToken, requireSuperAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { role, allowedMenus } = req.body;
+
+    const validRoles = ['SUPERADMIN', 'EMPLOYEE', 'CLIENT', 'USER', 'MASTER_ADMIN', 'SUB_ADMIN', 'FACILITY_MANAGER', 'SERVICE_PERSONNEL'];
+    if (role && !validRoles.includes(role)) {
+      return res.status(400).json({ success: false, message: 'Invalid system role specified' });
+    }
+
+    const updatedUser = await prisma.user.update({
+      where: { id },
+      data: {
+        ...(role && { role })
+      }
+    });
+
+    if (Array.isArray(allowedMenus)) {
+      const current = loadStoredPermissions();
+      current.userPermissions[id] = allowedMenus;
+      saveStoredPermissions(current);
+    }
+
+    await logActivity(req.user?.name || 'Superadmin', `Updated user role for ${updatedUser.name} to ${updatedUser.role}`, 'User Management');
+    res.json({ success: true, message: 'User role updated successfully', data: updatedUser });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // ----------------------------------------------------
 // Projects Management Endpoints
 // ----------------------------------------------------
