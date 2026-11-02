@@ -1251,19 +1251,14 @@ app.put('/api/roles/:id', authenticateToken, requireSuperAdmin, async (req, res)
 app.delete('/api/roles/:id', authenticateToken, requireSuperAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    const protectedRoles = ['SUPERADMIN', 'MASTER_ADMIN', 'SUB_ADMIN', 'FACILITY_MANAGER', 'EMPLOYEE', 'SERVICE_PERSONNEL', 'CLIENT', 'USER'];
 
-    if (protectedRoles.includes(id)) {
-      return res.status(400).json({ success: false, message: `System built-in role "${id}" cannot be deleted.` });
+    if (id === 'SUPERADMIN') {
+      return res.status(400).json({ success: false, message: 'The root Super Admin role cannot be deleted.' });
     }
 
     const role = await prisma.appRole.findUnique({ where: { id } });
     if (!role) {
       return res.status(404).json({ success: false, message: `Role "${id}" not found` });
-    }
-
-    if (role.isSystem) {
-      return res.status(400).json({ success: false, message: `System protected role "${role.label}" cannot be deleted.` });
     }
 
     // Safety check: verify no users are currently assigned to this role
