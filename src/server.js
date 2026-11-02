@@ -711,7 +711,7 @@ async function handleCreateUserOrEmployee(req, res) {
       return res.status(400).json({ success: false, message: 'User with this email already exists' });
     }
 
-    const validRoles = ['SUPERADMIN', 'EMPLOYEE', 'CLIENT', 'USER', 'MASTER_ADMIN', 'SUB_ADMIN', 'FACILITY_MANAGER', 'SERVICE_PERSONNEL'];
+    const validRoles = await getAllValidRoleIds();
     const assignedRole = (role && validRoles.includes(role)) ? role : 'EMPLOYEE';
 
     const plainPassword = password && password.trim() ? password : `Akash@${Math.floor(1000 + Math.random() * 9000)}`;
@@ -988,6 +988,17 @@ app.delete('/api/employees/:id', authenticateToken, requireSuperAdmin, async (re
 // ----------------------------------------------------
 const PERMISSIONS_FILE = path.join(__dirname, '..', 'role_permissions_data.json');
 
+const DEFAULT_SYSTEM_ROLES = [
+  { id: 'SUPERADMIN', label: 'Super Admin', badge: '🛡️ Superadmin', description: 'Full root access to all system modules, configurations, and user administration.', isSystem: true },
+  { id: 'MASTER_ADMIN', label: 'Master Admin', badge: '👑 Master Admin', description: 'High-level operational administrator with broad workflow access.', isSystem: true },
+  { id: 'SUB_ADMIN', label: 'Sub Admin', badge: '⚡ Sub Admin', description: 'Administrative staff managing day-to-day operations and purchase approvals.', isSystem: true },
+  { id: 'FACILITY_MANAGER', label: 'Facility Manager', badge: '🏢 Facility Manager', description: 'Manages facilities, service requests, attendance, and locations.', isSystem: true },
+  { id: 'EMPLOYEE', label: 'Employee', badge: '💼 Employee', description: 'Field and office personnel with attendance, projects, meetings, and inventory access.', isSystem: true },
+  { id: 'SERVICE_PERSONNEL', label: 'Service Personnel', badge: '🔧 Service Personnel', description: 'Field service technicians handling on-site visits, attendance, and material requests.', isSystem: true },
+  { id: 'CLIENT', label: 'Client / Customer', badge: '🤝 Client', description: 'External customer portal for viewing quotations, invoices, projects, and AMC contracts.', isSystem: true },
+  { id: 'USER', label: 'Standard User', badge: '👤 User', description: 'Standard guest / client user account with restricted viewing access.', isSystem: true }
+];
+
 const DEFAULT_ROLE_PERMISSIONS_BACKEND = {
   SUPERADMIN: [
     'dashboard', 'service_meeting', 'projects', 'material_request',
@@ -1029,6 +1040,42 @@ const DEFAULT_ROLE_PERMISSIONS_BACKEND = {
   ]
 };
 
+async function ensureDefaultRolesInDb() {
+  try {
+    const count = await prisma.appRole.count();
+    if (count === 0) {
+      for (const r of DEFAULT_SYSTEM_ROLES) {
+        await prisma.appRole.upsert({
+          where: { id: r.id },
+          update: {},
+          create: {
+            id: r.id,
+            label: r.label,
+            badge: r.badge,
+            description: r.description,
+            isSystem: true,
+            permissions: DEFAULT_ROLE_PERMISSIONS_BACKEND[r.id] || []
+          }
+        });
+      }
+    }
+  } catch (err) {
+    console.warn('DB Role initialization check skipped:', err.message);
+  }
+}
+
+async function getAllValidRoleIds() {
+  try {
+    const dbRoles = await prisma.appRole.findMany({ select: { id: true } });
+    if (dbRoles && dbRoles.length > 0) {
+      return dbRoles.map(r => r.id);
+    }
+  } catch (err) {
+    // Fallback if DB table not yet queried
+  }
+  return DEFAULT_SYSTEM_ROLES.map(r => r.id);
+}
+
 function loadStoredPermissions() {
   try {
     if (fs.existsSync(PERMISSIONS_FILE)) {
@@ -1055,6 +1102,200 @@ function saveStoredPermissions(perms) {
   }
 }
 
+// ----------------------------------------------------
+// Role Definitions CRUD Endpoints (Database-Driven)
+// ----------------------------------------------------
+app.get('/api/roles', async (req, res) => {
+  try {
+    await ensureDefaultRolesInDb();
+    let dbRoles = [];
+    try {
+      dbRoles = await prisma.appRole.findMany({
+        orderBy: { createdAt: 'asc' }
+      });
+    } catch (e) {
+      dbRoles = [];
+    }
+
+    // If database returned no roles, use DEFAULT_SYSTEM_ROLES as baseline
+    let rolesToReturn = dbRoles.length > 0 ? dbRoles : DEFAULT_SYSTEM_ROLES.map(r => ({
+      ...r,
+      permissions: DEFAULT_ROLE_PERMISSIONS_BACKEND[r.id] || []
+    }));
+
+    // Attach active user counts for each role
+    let countsMap = {};
+    try {
+      const userCounts = await prisma.user.groupBy({
+        by: ['role'],
+        _count: { id: true }
+      });
+      userCounts.forEach(c => {
+        if (c.role) countsMap[c.role] = c._count.id;
+      });
+    } catch (countErr) {
+      // Ignored if table not populated
+    }
+
+    const storedPerms = loadStoredPermissions();
+
+    const formattedRoles = rolesToReturn.map(r => ({
+      id: r.id,
+      label: r.label,
+      badge: r.badge,
+      description: r.description || '',
+      isSystem: Boolean(r.isSystem),
+      permissions: storedPerms.rolePermissions[r.id] || r.permissions || DEFAULT_ROLE_PERMISSIONS_BACKEND[r.id] || [],
+      userCount: countsMap[r.id] || 0
+    }));
+
+    res.json({ success: true, roles: formattedRoles });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.post('/api/roles', authenticateToken, requireSuperAdmin, async (req, res) => {
+  try {
+    const { id, label, badge, description, permissions } = req.body;
+    if (!label || !label.trim()) {
+      return res.status(400).json({ success: false, message: 'Role label / name is required' });
+    }
+
+    // Generate or clean identifier
+    let roleId = (id || label).trim().toUpperCase().replace(/[^A-Z0-9]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+    if (!roleId || roleId.length < 2) {
+      roleId = `ROLE_${Date.now()}`;
+    }
+
+    // Check if role identifier already exists
+    let existing = null;
+    try {
+      existing = await prisma.appRole.findUnique({ where: { id: roleId } });
+    } catch (e) {}
+
+    if (existing) {
+      return res.status(400).json({ success: false, message: `A role with identifier "${roleId}" already exists.` });
+    }
+
+    const initialPermissions = Array.isArray(permissions) ? permissions : (DEFAULT_ROLE_PERMISSIONS_BACKEND.EMPLOYEE || []);
+
+    const newRole = await prisma.appRole.create({
+      data: {
+        id: roleId,
+        label: label.trim(),
+        badge: badge && badge.trim() ? badge.trim() : `💼 ${label.trim()}`,
+        description: description ? description.trim() : '',
+        isSystem: false,
+        permissions: initialPermissions
+      }
+    });
+
+    // Sync with role_permissions_data.json
+    const current = loadStoredPermissions();
+    current.rolePermissions[roleId] = initialPermissions;
+    saveStoredPermissions(current);
+
+    await logActivity(req.user?.name || 'Superadmin', `Created new system role: ${newRole.label} (${newRole.id})`, 'Role Access Control');
+
+    res.json({
+      success: true,
+      message: `Role "${newRole.label}" created successfully`,
+      role: { ...newRole, userCount: 0 }
+    });
+  } catch (err) {
+    console.error('Create role error:', err);
+    res.status(500).json({ success: false, message: err.message || 'Error creating role' });
+  }
+});
+
+app.put('/api/roles/:id', authenticateToken, requireSuperAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { label, badge, description, permissions } = req.body;
+
+    const existing = await prisma.appRole.findUnique({ where: { id } });
+    if (!existing) {
+      return res.status(404).json({ success: false, message: `Role "${id}" not found` });
+    }
+
+    const updated = await prisma.appRole.update({
+      where: { id },
+      data: {
+        ...(label && { label: label.trim() }),
+        ...(badge && { badge: badge.trim() }),
+        ...(description !== undefined && { description: description.trim() }),
+        ...(Array.isArray(permissions) && { permissions })
+      }
+    });
+
+    if (Array.isArray(permissions)) {
+      const current = loadStoredPermissions();
+      current.rolePermissions[id] = permissions;
+      saveStoredPermissions(current);
+    }
+
+    await logActivity(req.user?.name || 'Superadmin', `Updated role details for ${updated.label} (${updated.id})`, 'Role Access Control');
+
+    res.json({
+      success: true,
+      message: `Role "${updated.label}" updated successfully`,
+      role: updated
+    });
+  } catch (err) {
+    console.error('Update role error:', err);
+    res.status(500).json({ success: false, message: err.message || 'Error updating role' });
+  }
+});
+
+app.delete('/api/roles/:id', authenticateToken, requireSuperAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const protectedRoles = ['SUPERADMIN', 'MASTER_ADMIN', 'SUB_ADMIN', 'FACILITY_MANAGER', 'EMPLOYEE', 'SERVICE_PERSONNEL', 'CLIENT', 'USER'];
+
+    if (protectedRoles.includes(id)) {
+      return res.status(400).json({ success: false, message: `System built-in role "${id}" cannot be deleted.` });
+    }
+
+    const role = await prisma.appRole.findUnique({ where: { id } });
+    if (!role) {
+      return res.status(404).json({ success: false, message: `Role "${id}" not found` });
+    }
+
+    if (role.isSystem) {
+      return res.status(400).json({ success: false, message: `System protected role "${role.label}" cannot be deleted.` });
+    }
+
+    // Safety check: verify no users are currently assigned to this role
+    const assignedUserCount = await prisma.user.count({ where: { role: id } });
+    if (assignedUserCount > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot delete role "${role.label}" because ${assignedUserCount} user(s) are currently assigned to it. Please reassign those users in User Management before deleting this role.`
+      });
+    }
+
+    await prisma.appRole.delete({ where: { id } });
+
+    // Clean up role permissions cache file
+    const current = loadStoredPermissions();
+    if (current.rolePermissions[id]) {
+      delete current.rolePermissions[id];
+      saveStoredPermissions(current);
+    }
+
+    await logActivity(req.user?.name || 'Superadmin', `Deleted custom role: ${role.label} (${id})`, 'Role Access Control');
+
+    res.json({ success: true, message: `Role "${role.label}" deleted successfully` });
+  } catch (err) {
+    console.error('Delete role error:', err);
+    res.status(500).json({ success: false, message: err.message || 'Error deleting role' });
+  }
+});
+
+// ----------------------------------------------------
+// Role Permissions Endpoints
+// ----------------------------------------------------
 app.get('/api/role-permissions', (req, res) => {
   const perms = loadStoredPermissions();
   res.json({
@@ -1073,6 +1314,21 @@ app.post('/api/role-permissions', authenticateToken, requireSuperAdmin, async (r
     const current = loadStoredPermissions();
     current.rolePermissions = { ...current.rolePermissions, ...rolePermissions };
     saveStoredPermissions(current);
+
+    // Also persist permissions into AppRole records
+    try {
+      for (const [roleKey, pList] of Object.entries(rolePermissions)) {
+        if (Array.isArray(pList)) {
+          await prisma.appRole.updateMany({
+            where: { id: roleKey },
+            data: { permissions: pList }
+          });
+        }
+      }
+    } catch (dbErr) {
+      // Ignored if non-blocking
+    }
+
     await logActivity(req.user?.name || 'Superadmin', 'Updated system role menu permissions', 'Role Access Control');
     res.json({ success: true, message: 'Role permissions saved successfully', rolePermissions: current.rolePermissions });
   } catch (err) {
@@ -1101,7 +1357,7 @@ app.put('/api/users/:id/role', authenticateToken, requireSuperAdmin, async (req,
     const { id } = req.params;
     const { role, allowedMenus } = req.body;
 
-    const validRoles = ['SUPERADMIN', 'EMPLOYEE', 'CLIENT', 'USER', 'MASTER_ADMIN', 'SUB_ADMIN', 'FACILITY_MANAGER', 'SERVICE_PERSONNEL'];
+    const validRoles = await getAllValidRoleIds();
     if (role && !validRoles.includes(role)) {
       return res.status(400).json({ success: false, message: 'Invalid system role specified' });
     }

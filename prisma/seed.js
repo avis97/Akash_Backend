@@ -487,6 +487,39 @@ async function main() {
   }
   console.log('✅ Vendor Bills seeded into database');
 
+  // 17. App Roles & Permissions
+  const DEFAULT_SYSTEM_ROLES = [
+    { id: 'SUPERADMIN', label: 'Super Admin', badge: '🛡️ Superadmin', description: 'Full root access to all system modules, configurations, and user administration.', isSystem: true },
+    { id: 'MASTER_ADMIN', label: 'Master Admin', badge: '👑 Master Admin', description: 'High-level operational administrator with broad workflow access.', isSystem: true },
+    { id: 'SUB_ADMIN', label: 'Sub Admin', badge: '⚡ Sub Admin', description: 'Administrative staff managing day-to-day operations and purchase approvals.', isSystem: true },
+    { id: 'FACILITY_MANAGER', label: 'Facility Manager', badge: '🏢 Facility Manager', description: 'Manages facilities, service requests, attendance, and locations.', isSystem: true },
+    { id: 'EMPLOYEE', label: 'Employee', badge: '💼 Employee', description: 'Field and office personnel with attendance, projects, meetings, and inventory access.', isSystem: true },
+    { id: 'SERVICE_PERSONNEL', label: 'Service Personnel', badge: '🔧 Service Personnel', description: 'Field service technicians handling on-site visits, attendance, and material requests.', isSystem: true },
+    { id: 'CLIENT', label: 'Client / Customer', badge: '🤝 Client', description: 'External customer portal for viewing quotations, invoices, projects, and AMC contracts.', isSystem: true },
+    { id: 'USER', label: 'Standard User', badge: '👤 User', description: 'Standard guest / client user account with restricted viewing access.', isSystem: true }
+  ];
+
+  for (const r of DEFAULT_SYSTEM_ROLES) {
+    await prisma.appRole.upsert({
+      where: { id: r.id },
+      update: {
+        label: r.label,
+        badge: r.badge,
+        description: r.description,
+        isSystem: r.isSystem
+      },
+      create: {
+        id: r.id,
+        label: r.label,
+        badge: r.badge,
+        description: r.description,
+        isSystem: r.isSystem,
+        permissions: []
+      }
+    });
+  }
+  console.log('✅ App Roles seeded into database');
+
   console.log('🎉 Full Akash CRM Database Seeding completed successfully!');
 }
 
