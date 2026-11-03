@@ -171,6 +171,21 @@ async function seedMasterData() {
         await prisma.branch.create({ data: branch });
       }
     }
+
+    const desigCount = await prisma.designation.count();
+    if (desigCount === 0) {
+      const defaultDesignations = [
+        { name: 'Software Engineer', code: 'SE' },
+        { name: 'Senior Developer', code: 'SR-DEV' },
+        { name: 'Project Manager', code: 'PM' },
+        { name: 'Service Personnel', code: 'SP' },
+        { name: 'Accountant', code: 'ACC' },
+        { name: 'HR Executive', code: 'HR' }
+      ];
+      for (const desig of defaultDesignations) {
+        await prisma.designation.create({ data: desig });
+      }
+    }
   } catch (err) {
     console.error('Error seeding master data:', err.message);
   }
@@ -180,19 +195,20 @@ seedMasterData();
 // GET all master data at once
 app.get('/api/master-data', async (req, res) => {
   try {
-    const [categories, brands, units, taxes, departments, branches, trainingTypes, trainers] = await Promise.all([
+    const [categories, brands, units, taxes, departments, branches, designations, trainingTypes, trainers] = await Promise.all([
       prisma.productCategory.findMany({ orderBy: { name: 'asc' } }),
       prisma.productBrand.findMany({ orderBy: { name: 'asc' } }),
       prisma.productUnit.findMany({ orderBy: { name: 'asc' } }),
       prisma.taxRate.findMany({ orderBy: { rate: 'desc' } }),
       prisma.department.findMany({ orderBy: { name: 'asc' } }),
       prisma.branch.findMany({ orderBy: { name: 'asc' } }),
+      prisma.designation.findMany({ orderBy: { name: 'asc' } }),
       prisma.trainingType.findMany({ orderBy: { name: 'asc' } }),
       prisma.trainer.findMany({ orderBy: { name: 'asc' } })
     ]);
     res.json({
       success: true,
-      data: { categories, brands, units, taxes, departments, branches, trainingTypes, trainers }
+      data: { categories, brands, units, taxes, departments, branches, designations, trainingTypes, trainers }
     });
   } catch (err) {
     res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
@@ -428,6 +444,46 @@ app.delete('/api/branches/:id', async (req, res) => {
   try {
     const deleted = await prisma.branch.delete({ where: { id: req.params.id } });
     await logActivity('Admin', `Deleted Branch: ${deleted.name}`, 'Master Data');
+    res.json({ success: true, data: deleted });
+  } catch (err) { res.status(500).json({ success: false, message: formatDbErrorMessage(err) }); }
+});
+
+// Designations CRUD
+app.get('/api/designations', async (req, res) => {
+  try {
+    const data = await prisma.designation.findMany({ orderBy: { name: 'asc' } });
+    res.json({ success: true, data });
+  } catch (err) { res.status(500).json({ success: false, message: formatDbErrorMessage(err) }); }
+});
+
+app.post('/api/designations', async (req, res) => {
+  try {
+    const { name, code } = req.body;
+    if (!name || !name.trim()) return res.status(400).json({ success: false, message: 'Designation Name is required' });
+    const newDesig = await prisma.designation.create({
+      data: { name: name.trim(), code: code?.trim() || null }
+    });
+    await logActivity('Admin', `Created Designation: ${newDesig.name}`, 'Master Data');
+    res.json({ success: true, data: newDesig });
+  } catch (err) { res.status(500).json({ success: false, message: formatDbErrorMessage(err) }); }
+});
+
+app.put('/api/designations/:id', async (req, res) => {
+  try {
+    const { name, code } = req.body;
+    const updated = await prisma.designation.update({
+      where: { id: req.params.id },
+      data: { name: name.trim(), code: code?.trim() || null }
+    });
+    await logActivity('Admin', `Updated Designation: ${updated.name}`, 'Master Data');
+    res.json({ success: true, data: updated });
+  } catch (err) { res.status(500).json({ success: false, message: formatDbErrorMessage(err) }); }
+});
+
+app.delete('/api/designations/:id', async (req, res) => {
+  try {
+    const deleted = await prisma.designation.delete({ where: { id: req.params.id } });
+    await logActivity('Admin', `Deleted Designation: ${deleted.name}`, 'Master Data');
     res.json({ success: true, data: deleted });
   } catch (err) { res.status(500).json({ success: false, message: formatDbErrorMessage(err) }); }
 });
